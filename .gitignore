@@ -1,0 +1,5 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+批量导出/
