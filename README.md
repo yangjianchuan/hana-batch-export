@@ -9,16 +9,6 @@
 - 支持分页导出大数据量
 - 支持环境变量配置数据库连接
 
-## 文件说明
-
-- `utils.py`: 工具函数
-- `.env`: 环境变量配置文件
-- `.env.example`: 环境变量配置示例
-- `batch_export_sql_to_excel.py`: 批量导出脚本
-- `batch_export_sql_to_one_excel.py`: 批量导出到单个 Excel 文件
-- `requirements.txt`: 依赖包列表
-- `批量导出/`: 包含示例 SQL 和导出的 Excel 文件
-
 ## 使用说明
 
 1. 安装依赖：
@@ -57,11 +47,47 @@
 
 ## 环境变量说明
 
+### 数据库连接配置
 - `HANA_HOST`: HANA数据库主机地址
 - `HANA_PORT`: HANA数据库端口号
 - `HANA_USER`: HANA数据库用户名
 - `HANA_PASSWORD`: HANA数据库密码
+
+### 分页配置
 - `PAGE_SIZE`: 分页导出时每页的记录数，默认2000
+
+### 导出文件配置
+- `FILE_PREFIX`: 导出文件前缀，默认"output"
+- `FILE_EXTENSION`: 导出文件扩展名，默认"xlsx"
+
+### 列宽配置
+- `COLUMN_WIDTH`: Excel列宽，默认20
+
+### 表头样式配置
+- `HEADER_FONT_COLOR`: 表头字体颜色，默认"#50596d"
+- `HEADER_FONT_SIZE`: 表头字体大小，默认9
+- `HEADER_BG_COLOR`: 表头背景颜色，默认"#f5f7f8"
+- `HEADER_BORDER_COLOR`: 表头边框颜色，默认"#e0e4e6"
+
+### 正文样式配置
+- `BODY_FONT_COLOR`: 正文字体颜色，默认"#50596d"
+- `BODY_FONT_SIZE`: 正文字体大小，默认9
+- `BODY_BG_COLOR`: 正文背景颜色，默认"#ffffff"
+- `BODY_BORDER_COLOR`: 正文边框颜色，默认"#f4f4f8"
+- `FONT_NAME`: 导出文件使用的字体，默认"Arial"
+
+### 其他配置
+- `FREEZE_PANES`: 是否冻结首行，默认"True"，可设置为"False"禁用
+
+## 文件说明
+
+- `utils.py`: 工具函数
+- `.env`: 环境变量配置文件
+- `.env.example`: 环境变量配置示例
+- `batch_export_sql_to_excel.py`: 批量导出脚本
+- `batch_export_sql_to_one_excel.py`: 批量导出到单个 Excel 文件
+- `requirements.txt`: 依赖包列表
+- `批量导出/`: 包含示例 SQL 和导出的 Excel 文件
 
 ## 分页导出原理
 

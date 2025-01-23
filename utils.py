@@ -78,10 +78,12 @@ class HANAUtils:
             return None
 
     @staticmethod
-    def generate_timestamp_filename(prefix="output", extension="xlsx"):
+    def generate_timestamp_filename(prefix=None, extension=None):
         """生成带时间戳的文件名"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        return f"{prefix}_{timestamp}.{extension}"
+        file_prefix = os.getenv("FILE_PREFIX", "output") if prefix is None else prefix
+        file_extension = os.getenv("FILE_EXTENSION", "xlsx") if extension is None else extension
+        return f"{file_prefix}_{timestamp}.{file_extension}"
 
 class ExcelExporter:
     """Excel导出工具类"""
@@ -124,24 +126,24 @@ class ExcelExporter:
         
         # 定义表头格式（包含居中对齐）
         self.header_format = self.workbook.add_format({
-            'font_color': '#50596d',
-            'font_size': 9,
-            'bg_color': '#f5f7f8',
+            'font_color': os.getenv("HEADER_FONT_COLOR", '#50596d'),
+            'font_size': int(os.getenv("HEADER_FONT_SIZE", 9)),
+            'bg_color': os.getenv("HEADER_BG_COLOR", '#f5f7f8'),
             'border': 1,
-            'border_color': '#e0e4e6',
-            'font_name': '微软雅黑',
+            'border_color': os.getenv("HEADER_BORDER_COLOR", '#e0e4e6'),
+            'font_name': os.getenv("FONT_NAME", "Arial"),
             'align': 'center',
             'valign': 'vcenter'
         })
 
         # 定义表格正文格式（包含居中对齐）
         self.body_format = self.workbook.add_format({
-            'font_color': '#50596d',
-            'font_size': 9,
-            'bg_color': '#ffffff',
+            'font_color': os.getenv("BODY_FONT_COLOR", '#50596d'),
+            'font_size': int(os.getenv("BODY_FONT_SIZE", 9)),
+            'bg_color': os.getenv("BODY_BG_COLOR", '#ffffff'),
             'border': 1,
-            'border_color': '#f4f4f8',
-            'font_name': '微软雅黑',
+            'border_color': os.getenv("BODY_BORDER_COLOR", '#f4f4f8'),
+            'font_name': os.getenv("FONT_NAME", "Arial"),
             'align': 'center',
             'valign': 'vcenter'
         })
@@ -151,8 +153,8 @@ class ExcelExporter:
             'align': 'center',
             'valign': 'vcenter',
             'border': 1,
-            'border_color': '#f4f4f8',
-            'font_name': '微软雅黑'
+            'border_color': os.getenv("BODY_BORDER_COLOR", '#f4f4f8'),
+            'font_name': os.getenv("FONT_NAME", "Arial")
         })
 
     def export_page(self, cursor):
@@ -193,10 +195,12 @@ class ExcelExporter:
             self.worksheet.set_row(row, None, self.body_format)
         
         # 设置列宽
-        self.worksheet.set_column(0, num_cols - 1, 20, self.center_format)
+        column_width = int(os.getenv("COLUMN_WIDTH", 20))
+        self.worksheet.set_column(0, num_cols - 1, column_width, self.center_format)
         
         # 冻结首行
-        self.worksheet.freeze_panes(1, 0)
+        if os.getenv("FREEZE_PANES", "True").lower() == "true":
+            self.worksheet.freeze_panes(1, 0)
         
         processed = min(self.current_offset + self.page_size, self.total_records)
         print(f"已导出 {processed}/{self.total_records} 条记录 ({processed/self.total_records:.1%})")

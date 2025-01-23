@@ -29,29 +29,6 @@ def batch_export_to_one_excel(folder_path):
     writer = pd.ExcelWriter(output_file, engine='xlsxwriter')
     workbook = writer.book
 
-    # 定义格式
-    header_format = workbook.add_format({
-        'font_color': '#50596d',
-        'font_size': 9,
-        'bg_color': '#f5f7f8',
-        'border': 1,
-        'border_color': '#e0e4e6',
-        'font_name': '微软雅黑',
-        'align': 'center',
-        'valign': 'vcenter'
-    })
-
-    body_format = workbook.add_format({
-        'font_color': '#50596d',
-        'font_size': 9,
-        'bg_color': '#ffffff',
-        'border': 1,
-        'border_color': '#f4f4f8',
-        'font_name': '微软雅黑',
-        'align': 'center',
-        'valign': 'vcenter'
-    })
-
     # 遍历所有.sql文件
     for filename in sql_files:
         # 构建完整文件路径
