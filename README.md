@@ -1,6 +1,6 @@
 # HANA 查询与导出工具
 
-这是一个用于从 SAP HANA 数据库查询数据并导出到 Excel 的 Python 工具集。
+这是一个用于从 SAP HANA 数据库查询数据并导出到 Excel 的 Python 工具集，提供命令行和图形界面两种使用方式。
 
 ## 功能特性
 
@@ -8,42 +8,65 @@
 - 支持将查询结果导出到 Excel 文件
 - 支持分页导出大数据量
 - 支持环境变量配置数据库连接
+- 提供图形化界面(GUI)操作
+  - 支持SQL文件上传和直接输入两种模式
+  - 实时进度显示
+  - 数据库连接测试
+  - 导出完成后自动打开输出目录
 
 ## 使用说明
 
-1. 安装依赖：
+### 1. 安装依赖
+```bash
+pip install -r requirements.txt
+```
+
+### 2. 配置数据库连接
+- 复制 `.env.example` 为 `.env`
+- 编辑 `.env` 文件配置数据库连接信息
+
+### 3. 使用方式
+
+#### 命令行模式
+##### batch_export_sql_to_excel.py
+- 功能：批量执行多个 SQL 查询，每个查询生成单独的 Excel 文件
+- 使用方法：
+  1. 将所有 SQL 文件放在 `批量导出/` 目录下
+  2. 运行命令：
+     ```bash
+     python batch_export_sql_to_excel.py
+     ```
+  3. 输出文件：每个 SQL 文件生成对应的 Excel 文件，保存在 `批量导出/` 目录下
+
+##### batch_export_sql_to_one_excel.py
+- 功能：批量执行多个 SQL 查询，将所有结果合并到一个 Excel 文件的不同 sheet 中
+- 使用方法：
+  1. 将所有 SQL 文件放在 `批量导出/` 目录下
+  2. 运行命令：
+     ```bash
+     python batch_export_to_one_excel.py
+     ```
+  3. 输出文件：`批量导出/output_YYYYMMDD_HHMMSS.xlsx`，每个查询结果在单独的 sheet 中
+
+#### 图形界面模式
+1. 启动GUI：
    ```bash
-   pip install -r requirements.txt
+   python main.py
    ```
 
-2. 配置数据库连接：
-   - 复制 `.env.example` 为 `.env`
-   - 编辑 `.env` 文件配置数据库连接信息
+2. 界面说明：
+   - 数据库配置：输入HANA数据库连接信息
+   - SQL配置：
+     - 上传SQL文件：选择本地SQL文件
+     - 直接输入SQL：在文本框中输入SQL语句
+   - 导出配置：
+     - 设置分页大小（默认2000）
+     - 点击"导出到Excel"开始导出
 
-3. 脚本使用方法：
-
-   ### batch_export_sql_to_excel.py
-   - 功能：批量执行多个 SQL 查询，每个查询生成单独的 Excel 文件
-   - 使用方法：
-     1. 将所有 SQL 文件放在 `批量导出/` 目录下
-     2. 运行命令：
-        ```bash
-        python batch_export_sql_to_excel.py
-        ```
-     3. 输出文件：每个 SQL 文件生成对应的 Excel 文件，保存在 `批量导出/` 目录下
-
-   ### batch_export_sql_to_one_excel.py
-   - 功能：批量执行多个 SQL 查询，将所有结果合并到一个 Excel 文件的不同 sheet 中
-   - 使用方法：
-     1. 将所有 SQL 文件放在 `批量导出/` 目录下
-     2. 运行命令：
-        ```bash
-        python batch_export_to_one_excel.py
-        ```
-     3. 输出文件：`批量导出/output_YYYYMMDD_HHMMSS.xlsx`，每个查询结果在单独的 sheet 中
-
-4. 查看导出结果：
-   - 所有导出的 Excel 文件都保存在 `批量导出/` 目录下
+3. 导出过程：
+   - 进度条显示当前导出进度
+   - 状态栏显示当前操作状态
+   - 导出完成后自动打开输出目录
 
 ## 环境变量说明
 
@@ -81,6 +104,7 @@
 
 ## 文件说明
 
+- `main.py`: 图形界面主程序
 - `utils.py`: 工具函数
 - `.env`: 环境变量配置文件
 - `.env.example`: 环境变量配置示例
@@ -108,3 +132,4 @@
 - 导出前请确认目标目录有足够空间
 - SQL查询文件需要是.sql结尾的文件
 - 由于使用了分页导出，SQL语句中需要写ORDER BY，并且字段要是一个唯一值
+- GUI模式下，导出完成后会自动打开输出目录

@@ -90,10 +90,10 @@ class ExcelExporter:
     
     def __init__(self, sql_query, output_file, page_size=None):
         """初始化导出器"""
-        self.sql_query = sql_query
+        self.utils = HANAUtils()
+        self.sql_query = self.utils._clean_query(sql_query)
         self.output_file = output_file
         self.page_size = int(os.getenv("PAGE_SIZE", 2000)) if page_size is None else page_size
-        self.utils = HANAUtils()
         self.writer = None
         self.total_records = 0
         self.current_offset = 0
