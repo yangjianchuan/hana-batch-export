@@ -6,8 +6,7 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                            QSpinBox, QGroupBox, QCheckBox, QMessageBox,
                            QGridLayout, QListWidget)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
-from dotenv import load_dotenv
-from utils import HANAUtils, ExcelExporter
+from utils import ExcelExporter
 
 class ExportThread(QThread):
     """导出处理线程"""
@@ -40,7 +39,6 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.initUI()
-        self.loadConfig()
         
     def initUI(self):
         """初始化UI界面"""
@@ -52,24 +50,6 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(main_widget)
         layout = QVBoxLayout(main_widget)
         
-        # 数据库配置组
-        db_group = QGroupBox("数据库配置")
-        db_layout = QGridLayout()
-        
-        # 添加数据库配置控件
-        self.host_input = self.addConfigField(db_layout, 0, "主机地址:")
-        self.port_input = self.addConfigField(db_layout, 1, "端口:", "30041")
-        self.user_input = self.addConfigField(db_layout, 2, "用户名:")
-        self.password_input = self.addConfigField(db_layout, 3, "密码:")
-        self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
-        
-        # 测试连接按钮
-        self.test_conn_btn = QPushButton("测试连接")
-        self.test_conn_btn.clicked.connect(self.testConnection)
-        db_layout.addWidget(self.test_conn_btn, 4, 1)
-        
-        db_group.setLayout(db_layout)
-        layout.addWidget(db_group)
 
         # SQL配置组
         sql_group = QGroupBox("SQL配置")
@@ -153,44 +133,7 @@ class MainWindow(QMainWindow):
         self.status_label = QLabel()
         layout.addWidget(self.status_label)
 
-    def addConfigField(self, layout, row, label, default=""):
-        """添加配置字段到布局"""
-        layout.addWidget(QLabel(label), row, 0)
-        input_field = QLineEdit(default)
-        layout.addWidget(input_field, row, 1)
-        return input_field
 
-    def loadConfig(self):
-        """加载环境变量配置"""
-        load_dotenv()
-        self.host_input.setText(os.getenv("HANA_HOST", ""))
-        self.port_input.setText(str(os.getenv("HANA_PORT", "30041")))
-        self.user_input.setText(os.getenv("HANA_USER", ""))
-        self.password_input.setText(os.getenv("HANA_PASSWORD", ""))
-
-    def saveConfig(self):
-        """保存配置到.env文件"""
-        config = [
-            f"HANA_HOST={self.host_input.text()}",
-            f"HANA_PORT={self.port_input.text()}",
-            f"HANA_USER={self.user_input.text()}",
-            f"HANA_PASSWORD={self.password_input.text()}"
-        ]
-        
-        with open('.env', 'w', encoding='utf-8') as f:
-            f.write('\n'.join(config))
-
-    def testConnection(self):
-        """测试数据库连接"""
-        self.saveConfig()
-        utils = HANAUtils()
-        try:
-            utils.connect()
-            QMessageBox.information(self, "连接测试", "连接成功！")
-        except Exception as e:
-            QMessageBox.critical(self, "连接测试", f"连接失败: {str(e)}")
-        finally:
-            utils.disconnect()
 
     def switchSqlMode(self, mode):
         """切换SQL输入模式"""
@@ -220,9 +163,10 @@ class MainWindow(QMainWindow):
         
         if file_names:
             # 更新文件列表显示
-            self.sql_files = file_names
+            self.sql_files = [os.path.abspath(f) for f in file_names]  # 确保存储绝对路径
+            print("Selected files:", self.sql_files)  # 调试信息
             self.sql_files_list.clear()
-            for file_name in file_names:
+            for file_name in self.sql_files:
                 self.sql_files_list.addItem(file_name)
             
             # 自动选中并预览第一个文件
@@ -232,13 +176,13 @@ class MainWindow(QMainWindow):
 
     def startExport(self):
         """开始批量导出数据"""
-        self.sql_files = []
         output_dir = ""
         
         if self.sql_mode_combo.currentText() == "上传SQL文件":
             if not hasattr(self, 'sql_files') or not self.sql_files:
                 QMessageBox.warning(self, "警告", "请先选择SQL文件！")
                 return
+            print("Exporting files:", self.sql_files)  # 添加调试信息
             output_dir = os.path.dirname(os.path.abspath(self.sql_files[0]))
         else:
             # 直接输入SQL模式
@@ -254,9 +198,6 @@ class MainWindow(QMainWindow):
             self.sql_files = [temp_file]
             output_dir = os.getcwd()
             
-        # 保存当前配置
-        self.saveConfig()
-        
         # 开始批量导出
         self.current_export_index = 0
         self.output_dir = output_dir
@@ -274,7 +215,7 @@ class MainWindow(QMainWindow):
         
         try:
             with open(sql_file, 'r', encoding='utf-8') as f:
-                sql = HANAUtils()._clean_query(f.read())
+                sql = f.read()
         except Exception as e:
             QMessageBox.critical(self, "错误", f"无法读取SQL文件 {sql_file}: {str(e)}")
             self.current_export_index += 1

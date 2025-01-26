@@ -2,5 +2,5 @@
 *.pyc
 *.pyo
 *.xlsx
+*.sql
 __pycache__/
-批量导出/
