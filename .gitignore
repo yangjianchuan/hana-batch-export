@@ -3,4 +3,5 @@
 *.pyo
 *.xlsx
 *.sql
+*.exe
 __pycache__/

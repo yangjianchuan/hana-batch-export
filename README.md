@@ -2,6 +2,33 @@
 
 这是一个用于从 SAP HANA 数据库查询数据并导出到 Excel 的 Python 工具集，提供命令行和图形界面两种使用方式。
 
+## Release 使用说明
+
+### 下载和安装
+1. 访问项目的 [Releases](../../releases) 页面
+2. 下载最新版本的 `hana-batch-export.zip`
+3. 解压 zip 包，你会得到：
+   - `hana-batch-export.exe`: 主程序
+   - `.env.example`: 配置文件模板
+
+### 配置和使用
+1. 复制 `.env.example` 为 `.env`
+2. 编辑 `.env` 文件，配置你的数据库连接信息
+3. 运行 `hana-batch-export.exe` 启动程序
+
+### 如何发布新版本
+如果你是项目维护者，要发布新版本：
+1. 确保代码变更已提交到主分支
+2. 创建新的 tag（例如 `v1.0.1`）：
+   ```bash
+   git tag v1.0.1
+   git push origin v1.0.1
+   ```
+3. Github Actions 会自动：
+   - 编译最新代码生成 exe 文件
+   - 将 exe 和配置模板打包成 zip
+   - 创建新的 Release 并上传 zip 包
+
 ## 功能特性
 
 - 支持批量执行 SQL 查询

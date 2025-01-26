@@ -28,12 +28,16 @@ jobs:
       - name: Build EXE
         run: |
           pyinstaller --name="hana-batch-export" --windowed --clean --onefile main.py
+          # 复制 .env.example 到 dist 目录
+          copy .env.example dist\
+          # 创建 zip 包
+          Compress-Archive -Path "dist\hana-batch-export.exe","dist\.env.example" -DestinationPath "dist\hana-batch-export.zip"
           
       - name: Create Release
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: dist/hana-batch-export.exe
+          files: dist/hana-batch-export.zip
           generate_release_notes: true
           tag_name: ${{ github.ref_name }}  # 显式指定当前触发的 Tag
         # 即使不手动设置 GITHUB_TOKEN，GitHub 也会自动注入
