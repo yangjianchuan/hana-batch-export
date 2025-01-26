@@ -8,6 +8,9 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    # 关键修复：显式授予 contents: write 权限
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
       
@@ -32,5 +35,5 @@ jobs:
         with:
           files: dist/hana-batch-export.exe
           generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: ${{ github.ref_name }}  # 显式指定当前触发的 Tag
+        # 即使不手动设置 GITHUB_TOKEN，GitHub 也会自动注入
