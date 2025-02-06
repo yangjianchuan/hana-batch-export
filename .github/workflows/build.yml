@@ -28,7 +28,7 @@ jobs:
       - name: Build EXE
         run: |
           pyinstaller --name="hana-batch-export" --windowed --clean --onefile --hidden-import=xlsxwriter --hidden-import=pandas --hidden-import=openpyxl --hidden-import=sqlalchemy --hidden-import=pyodbc --hidden-import=python-dotenv --hidden-import=PyQt6 --hidden-import=hdbcli --hidden-import=numpy --collect-all xlsxwriter --collect-all pandas --collect-all openpyxl --collect-all numpy main.py
-          pyinstaller --onefile hana_query_analyzer.py
+          pyinstaller --onefile --windowed hana_query_analyzer.py
           # 复制 .env.example 到 dist 目录
           copy .env.example dist\
           copy README.md dist\
