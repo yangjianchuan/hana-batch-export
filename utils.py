@@ -46,7 +46,6 @@ class HANAUtils:
     def execute_query(self, query):
         """执行SQL查询并返回结果"""
         try:
-            self.connect()
             cursor = self.get_cursor()
             cleaned_query = self._clean_query(query)
             cursor.execute(cleaned_query)
@@ -55,8 +54,6 @@ class HANAUtils:
         except Exception as e:
             print(f"查询执行失败: {e}")
             return None
-        finally:
-            self.disconnect()
 
     def _clean_query(self, query):
         """清理SQL语句，去除末尾分号"""
@@ -90,8 +87,8 @@ class ExcelExporter:
     
     def __init__(self, sql_query, output_file, page_size=None):
         """初始化导出器"""
-        self.utils = HANAUtils()
-        self.sql_query = self.utils._clean_query(sql_query)
+        self.utils = HANAUtils()  # 创建实例但不立即连接
+        self.sql_query = self._clean_query(sql_query)
         self.output_file = output_file
         self.page_size = int(os.getenv("PAGE_SIZE", 2000)) if page_size is None else page_size
         self.writer = None
@@ -99,13 +96,21 @@ class ExcelExporter:
         self.current_offset = 0
         self.page_number = 1
 
+    def _clean_query(self, query):
+        """清理SQL语句，去除末尾分号"""
+        if query and query.strip().endswith(';'):
+            return query.rstrip(';')
+        return query
+
     def connect(self):
-        """建立数据库连接"""
+        """连接到HANA数据库"""
         self.utils.connect()
         return self.utils.get_cursor()
 
-    def get_total_records(self, cursor):
+    def get_total_records(self, cursor=None):
         """获取总记录数"""
+        if cursor is None:
+            cursor = self.utils.get_cursor()
         count_query = f"SELECT COUNT(*) FROM ({self.sql_query})"
         cursor.execute(count_query)
         self.total_records = cursor.fetchone()[0]
@@ -212,12 +217,11 @@ class ExcelExporter:
         """关闭资源"""
         if self.writer:
             self.writer.close()
-        self.utils.disconnect()
 
     def export(self):
         """执行导出流程"""
         try:
-            cursor = self.connect()
+            cursor = self.utils.get_cursor()
             self.get_total_records(cursor)
             self.init_excel_writer()
             
@@ -228,5 +232,6 @@ class ExcelExporter:
             
         except Exception as e:
             print(f"导出失败: {e}")
+            raise
         finally:
             self.close()

@@ -1,0 +1,375 @@
+import tkinter as tk
+from tkinter import ttk, filedialog, scrolledtext
+import os
+from datetime import datetime
+from pygments import lex
+from pygments.lexers.sql import SqlLexer
+from pygments.token import Token
+import time
+import pandas as pd
+from utils import HANAUtils
+
+class HanaQueryAnalyzer:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("HANA 查询分析器")
+        self.root.geometry("1200x800")
+        
+        # 从环境变量获取最大结果集大小，默认为100
+        self.max_results = int(os.getenv('RESULT_SIZE', '100'))
+        
+        # 创建主框架
+        main_frame = ttk.Frame(root)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # 创建顶部按钮区域
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        # 创建按钮并绑定快捷键
+        ttk.Button(button_frame, text="新增查询窗口 (Ctrl+N)", command=self.add_tab).pack(side=tk.LEFT, padx=2)
+        ttk.Button(button_frame, text="清空查询语句 (Ctrl+D)", command=self.clear_sql).pack(side=tk.LEFT, padx=2)
+        ttk.Button(button_frame, text="保存 (Ctrl+S)", command=self.save_sql).pack(side=tk.LEFT, padx=2)
+        ttk.Button(button_frame, text="加载 (Ctrl+O)", command=self.load_sql).pack(side=tk.LEFT, padx=2)
+        ttk.Button(button_frame, text="执行选中 (Ctrl+F8)", command=self.execute_selected).pack(side=tk.LEFT, padx=2)
+        ttk.Button(button_frame, text="执行全部 (F8)", command=self.execute_all).pack(side=tk.LEFT, padx=2)
+        ttk.Button(button_frame, text="导出结果 (F12)", command=self.export_results).pack(side=tk.LEFT, padx=2)
+
+        # 绑定快捷键
+        self.root.bind_all("<Control-n>", lambda e: self.add_tab())
+        self.root.bind_all("<Control-d>", lambda e: self.clear_sql())
+        self.root.bind_all("<Control-s>", lambda e: self.save_sql())
+        self.root.bind_all("<Control-o>", lambda e: self.load_sql())
+        self.root.bind_all("<Control-F8>", lambda e: self.execute_selected())
+        self.root.bind_all("<F8>", lambda e: self.execute_all())
+        self.root.bind_all("<F12>", lambda e: self.export_results())
+        
+        # 初始化HANA数据库工具
+        self.hana_utils = HANAUtils()
+        self.hana_utils.connect()  # 建立初始连接
+        
+        # 注册窗口关闭事件处理
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+        
+        # 创建多标签页
+        self.notebook = ttk.Notebook(main_frame)
+        self.notebook.pack(fill=tk.BOTH, expand=True)
+        
+        # 添加初始标签页
+        self.add_tab()
+        
+    def add_tab(self):
+        if len(self.notebook.tabs()) >= 10:
+            return
+            
+        frame = ttk.Frame(self.notebook)
+        self.notebook.add(frame, text=f"Query {len(self.notebook.tabs()) + 1}")
+        
+        # SQL输入框
+        sql_input = scrolledtext.ScrolledText(frame, wrap=tk.WORD)
+        sql_input.pack(fill=tk.BOTH, expand=True)
+        sql_input.bind('<KeyRelease>', self.highlight_sql)
+        
+        # 使用PanedWindow来分隔结果区域和日志区域
+        paned = ttk.PanedWindow(frame, orient=tk.VERTICAL)
+        paned.pack(fill=tk.BOTH, expand=True)
+        
+        # 结果展示区域
+        result_frame = ttk.Frame(paned)
+        paned.add(result_frame, weight=3)  # 结果区域占比更大
+        
+        # 创建Treeview组件和滚动条
+        # 设置height参数让Treeview显示固定行数，避免挤压水平滚动条
+        tree = ttk.Treeview(result_frame, show="headings", selectmode="extended", height=15)
+        
+        # 添加垂直滚动条
+        vsb = ttk.Scrollbar(result_frame, orient="vertical", command=tree.yview)
+        # 添加水平滚动条
+        hsb = ttk.Scrollbar(result_frame, orient="horizontal", command=tree.xview)
+        
+        # 配置Treeview的滚动
+        tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        # 设置列宽自动调整
+        style = ttk.Style()
+        style.configure('Treeview', rowheight=25)  # 调整行高
+        # 禁用换行，确保水平滚动条可以工作
+        style.configure('Treeview', wrap='none')
+        
+        # 使用grid布局管理器
+        tree.grid(column=0, row=0, sticky='nsew')
+        vsb.grid(column=1, row=0, sticky='ns')
+        hsb.grid(column=0, row=1, sticky='ew')
+        
+        # 确保水平滚动条位置正确
+        result_frame.grid_columnconfigure(0, weight=1)
+        result_frame.grid_columnconfigure(1, weight=0)  # 垂直滚动条列不伸展
+        result_frame.grid_rowconfigure(0, weight=1)
+        result_frame.grid_rowconfigure(1, weight=0)  # 水平滚动条行不伸展
+        
+        # 配置grid权重，使Treeview能够自动扩展
+        result_frame.grid_columnconfigure(0, weight=1)
+        result_frame.grid_rowconfigure(0, weight=1)
+        
+        # 日志区域（在PanedWindow中）
+        log_frame = ttk.Frame(paned)
+        paned.add(log_frame, weight=1)  # 日志区域占比较小
+        
+        log_text = scrolledtext.ScrolledText(log_frame, height=6)
+        log_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # 将组件存储为frame的属性
+        frame.sql_input = sql_input
+        frame.result_text = tree  # 将tree组件赋值给result_text
+        frame.log_text = log_text
+        
+    def get_current_tab_widgets(self):
+        """获取当前标签页的组件"""
+        current_tab = self.notebook.nametowidget(self.notebook.select())
+        if not current_tab:
+            return None, None, None
+        return (
+            getattr(current_tab, 'sql_input', None),
+            getattr(current_tab, 'result_text', None),
+            getattr(current_tab, 'log_text', None)
+        )
+        
+    def highlight_sql(self, event=None):
+        # 获取当前标签页的SQL输入框
+        sql_input, _, _ = self.get_current_tab_widgets()
+        if not sql_input:
+            return
+            
+        # 获取SQL文本
+        sql_text = sql_input.get("1.0", tk.END)
+        
+        # 删除所有现有的标记
+        for tag in sql_input.tag_names():
+            sql_input.tag_remove(tag, "1.0", tk.END)
+        
+        # 使用pygments进行语法分析
+        for token, content in lex(sql_text, SqlLexer()):
+            if not content.strip():  # 跳过空白内容
+                continue
+                
+            start_index = "1.0"
+            while True:
+                # 查找下一个匹配位置
+                pos = sql_input.search(content, start_index, tk.END)
+                if not pos:
+                    break
+                    
+                # 计算结束位置
+                end = f"{pos}+{len(content)}c"
+                
+                # 添加标记
+                token_str = str(token)
+                sql_input.tag_add(token_str, pos, end)
+                sql_input.tag_config(token_str, foreground=self.get_token_color(token))
+                
+                # 更新起始位置
+                start_index = end
+                
+    def get_token_color(self, token):
+        # 定义不同token类型的颜色
+        colors = {
+            Token.Keyword: "blue",
+            Token.Operator: "red",
+            Token.Literal.String: "green",
+            Token.Comment: "gray",
+            Token.Name.Builtin: "purple",
+            Token.Punctuation: "brown"
+        }
+        return colors.get(token, "black")
+        
+    def save_sql(self):
+        # 获取当前标签页的SQL输入框
+        sql_input, _, _ = self.get_current_tab_widgets()
+        if not sql_input:
+            return
+        
+        # 获取SQL文本
+        sql_text = sql_input.get("1.0", tk.END)
+        
+        # 打开文件保存对话框
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".sql",
+            filetypes=[("SQL Files", "*.sql"), ("All Files", "*.*")]
+        )
+        
+        if file_path:
+            try:
+                with open(file_path, "w", encoding="utf-8") as f:
+                    f.write(sql_text)
+                self.log_message(f"SQL脚本已保存到: {file_path}")
+            except Exception as e:
+                self.log_message(f"保存失败: {str(e)}")
+        
+    def load_sql(self):
+        # 获取当前标签页的SQL输入框
+        sql_input, _, _ = self.get_current_tab_widgets()
+        if not sql_input:
+            return
+        
+        # 打开文件选择对话框
+        file_path = filedialog.askopenfilename(
+            filetypes=[("SQL Files", "*.sql"), ("All Files", "*.*")]
+        )
+        
+        if file_path:
+            try:
+                with open(file_path, "r", encoding="utf-8") as f:
+                    sql_text = f.read()
+                    sql_input.delete("1.0", tk.END)
+                    sql_input.insert("1.0", sql_text)
+                    # 加载后触发语法高亮
+                    self.highlight_sql()
+                self.log_message(f"已加载SQL脚本: {file_path}")
+            except Exception as e:
+                self.log_message(f"加载失败: {str(e)}")
+        
+    def execute_selected(self):
+        # 获取当前标签页的组件
+        sql_input, result_text, _ = self.get_current_tab_widgets()
+        if not sql_input or not result_text:
+            return
+        
+        # 获取选中的SQL文本
+        try:
+            selected_text = sql_input.get(tk.SEL_FIRST, tk.SEL_LAST)
+            if not selected_text.strip():
+                self.log_message("未选中任何SQL语句")
+                return
+                
+            # 执行SQL并显示结果
+            self.execute_sql(selected_text, result_text)
+            
+        except tk.TclError:
+            self.log_message("请先选择要执行的SQL语句")
+            
+    def execute_all(self):
+        # 获取当前标签页的组件
+        sql_input, result_text, _ = self.get_current_tab_widgets()
+        if not sql_input or not result_text:
+            return
+        
+        # 获取所有SQL文本
+        all_text = sql_input.get("1.0", tk.END)
+        if not all_text.strip():
+            self.log_message("SQL输入框为空")
+            return
+            
+        # 执行SQL并显示结果
+        self.execute_sql(all_text, result_text)
+        
+    def on_closing(self):
+        """窗口关闭时的清理操作"""
+        try:
+            # 断开数据库连接
+            self.hana_utils.disconnect()
+        finally:
+            self.root.destroy()
+            
+    def execute_sql(self, sql_text, result_text):
+        # 清除之前的结果
+        for item in result_text.get_children():
+            result_text.delete(item)
+        result_text["columns"] = []
+        
+        # 记录开始时间
+        start_time = time.time()
+        
+        try:
+            # 执行SQL查询
+            cursor = self.hana_utils.get_cursor()
+            cursor.execute(sql_text)
+            results = cursor.fetchmany(self.max_results + 1)  # 多获取一条用于判断是否超出限制
+            columns = [desc[0] for desc in cursor.description]
+            
+            if results:
+                # 检查是否超出最大结果集限制
+                if len(results) > self.max_results:
+                    results = results[:self.max_results]  # 只保留前max_results条
+                    self.log_message(f"警告：结果集已被限制为前{self.max_results}条记录")
+                
+                # 将结果转换为DataFrame以便格式化显示
+                df = pd.DataFrame(results, columns=columns)
+                
+                # 设置列
+                result_text["columns"] = columns
+                for col in columns:
+                    result_text.heading(col, text=col)
+                    # 设置列属性：固定宽度，禁止自动拉伸
+                    result_text.column(col, width=150, minwidth=100, stretch=False, anchor='center')
+                
+                # 插入数据
+                for _, row in df.iterrows():
+                    result_text.insert("", "end", values=tuple(row))
+                
+                # 显示记录数
+                self.log_message(f"共 {len(results)} 条记录")
+            else:
+                self.log_message("查询未返回结果")
+            
+            duration = time.time() - start_time
+            self.log_message(f"SQL执行成功，耗时: {duration:.2f}秒")
+            
+        except Exception as e:
+            # 记录错误信息
+            duration = time.time() - start_time
+            self.log_message(f"SQL执行失败: {str(e)}")
+            self.log_message(f"错误: {str(e)}")
+        
+    def export_results(self):
+        # 获取当前标签页的SQL输入框和结果区域
+        sql_input, result_text, _ = self.get_current_tab_widgets()
+        if not sql_input or not result_text:
+            return
+        
+        # 获取SQL文本
+        sql_text = sql_input.get("1.0", tk.END).strip()
+        if not sql_text:
+            self.log_message("没有SQL语句可执行")
+            return
+            
+        # 打开文件保存对话框
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".xlsx",
+            filetypes=[("Excel Files", "*.xlsx"), ("All Files", "*.*")]
+        )
+        
+        if file_path:
+            try:
+                # 使用ExcelExporter导出结果
+                from utils import ExcelExporter
+                exporter = ExcelExporter(sql_text, file_path)
+                exporter.utils = self.hana_utils  # 使用已有的数据库连接
+                exporter.export()
+                self.log_message(f"结果已导出到: {file_path}")
+            except Exception as e:
+                self.log_message(f"导出失败: {str(e)}")
+        
+    def clear_sql(self):
+        # 清空当前查询窗口的SQL文本
+        sql_input, _, _ = self.get_current_tab_widgets()
+        if sql_input:
+            sql_input.delete("1.0", tk.END)
+            self.log_message("已清空查询语句")
+            
+    def create_menu(self):
+        # 创建菜单栏
+        pass
+        
+    def log_message(self, message):
+        # 记录日志
+        _, _, log_text = self.get_current_tab_widgets()
+        if not log_text:
+            return
+            
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        log_text.insert(tk.END, f"[{timestamp}] {message}\n")
+        log_text.see(tk.END)
+        
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = HanaQueryAnalyzer(root)
+    root.mainloop()

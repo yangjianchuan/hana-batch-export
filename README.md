@@ -40,6 +40,13 @@
   - 实时进度显示
   - 数据库连接测试
   - 导出完成后自动打开输出目录
+  - 支持多标签页查询
+  - 支持SQL语法高亮
+  - 支持执行选中SQL或全部SQL
+  - 支持查询结果导出为Excel
+  - 支持SQL脚本的保存和加载
+  - 支持查询日志记录
+  - 支持快捷键操作
 
 ## 使用说明
 
@@ -76,6 +83,8 @@ pip install -r requirements.txt
   3. 输出文件：`批量导出/output_YYYYMMDD_HHMMSS.xlsx`，每个查询结果在单独的 sheet 中
 
 #### 图形界面模式
+
+##### main.py
 1. 启动GUI：
    ```bash
    python main.py
@@ -89,11 +98,24 @@ pip install -r requirements.txt
    - 导出配置：
      - 设置分页大小（默认2000）
      - 点击"导出到Excel"开始导出
-
+   - SQL语法高亮：实时显示SQL语法高亮
+   
 3. 导出过程：
    - 进度条显示当前导出进度
-   - 状态栏显示当前操作状态
-   - 导出完成后自动打开输出目录
+
+##### hana_query_analyzer.py
+1. 启动GUI：
+   ```bash
+   python hana_query_analyzer.py
+   ```
+
+2. 主要功能：
+   - 查询分析：执行SQL查询
+   - 查询统计：统计查询执行时间、资源消耗等指标
+   
+3. 界面说明：
+   - 查询输入：输入或上传SQL查询
+   - 分析结果：显示查询结果
 
 ## 环境变量说明
 
@@ -104,7 +126,7 @@ pip install -r requirements.txt
 - `HANA_PASSWORD`: HANA数据库密码
 
 ### 分页配置
-- `PAGE_SIZE`: 分页导出时每页的记录数，默认2000
+- `PAGE_SIZE`: 分页导出时每页的记录数，默认10000
 
 ### 导出文件配置
 - `FILE_PREFIX`: 导出文件前缀，默认"output"

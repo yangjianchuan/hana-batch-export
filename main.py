@@ -6,7 +6,45 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                            QSpinBox, QGroupBox, QCheckBox, QMessageBox,
                            QGridLayout, QListWidget)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtGui import QTextCharFormat, QSyntaxHighlighter, QColor
+from pygments import lex
+from pygments.lexers.sql import SqlLexer
+from pygments.token import Token
 from utils import ExcelExporter
+
+class SqlHighlighter(QSyntaxHighlighter):
+    """SQL语法高亮类"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setup_formats()
+        
+    def setup_formats(self):
+        """设置不同token类型的格式"""
+        self.formats = {}
+        
+        # 使用和hana_query_analyzer.py相同的颜色方案
+        colors = {
+            Token.Keyword: "blue",
+            Token.Operator: "red",
+            Token.Literal.String: "green",
+            Token.Comment: "gray",
+            Token.Name.Builtin: "purple",
+            Token.Punctuation: "brown"
+        }
+        
+        # 为每种token类型创建格式
+        for token, color in colors.items():
+            format = QTextCharFormat()
+            format.setForeground(QColor(color))
+            self.formats[token] = format
+
+    def highlightBlock(self, text):
+        """实现高亮逻辑"""
+        # 使用pygments进行语法分析
+        for token, content in lex(text, SqlLexer()):
+            format = self.formats.get(token, None) or self.formats.get(token.parent, None)
+            if format is not None:
+                self.setFormat(text.find(content), len(content), format)
 
 class ExportThread(QThread):
     """导出处理线程"""
@@ -86,12 +124,14 @@ class MainWindow(QMainWindow):
         self.sql_preview = QTextEdit()
         self.sql_preview.setPlaceholderText("SQL预览(点击列表中的文件查看内容)...")
         self.sql_preview.setReadOnly(True)
+        self.sql_preview_highlighter = SqlHighlighter(self.sql_preview.document())
         file_layout.addWidget(self.sql_preview)
         
         # SQL直接输入界面
         input_layout = QVBoxLayout(self.input_widget)
         self.sql_input = QTextEdit()
         self.sql_input.setPlaceholderText("在此输入SQL语句...")
+        self.sql_input_highlighter = SqlHighlighter(self.sql_input.document())
         input_layout.addWidget(self.sql_input)
         
         # 默认显示文件上传界面
@@ -111,7 +151,7 @@ class MainWindow(QMainWindow):
         page_size_layout.addWidget(QLabel("分页大小:"))
         self.page_size_input = QSpinBox()
         self.page_size_input.setRange(100, 10000)
-        self.page_size_input.setValue(2000)
+        self.page_size_input.setValue(int(os.getenv('PAGE_SIZE', 2000)))
         self.page_size_input.setSingleStep(100)
         page_size_layout.addWidget(self.page_size_input)
         
