@@ -7,6 +7,8 @@ from pygments.lexers.sql import SqlLexer
 from pygments.token import Token
 import time
 import pandas as pd
+import threading
+import queue
 from utils import HANAUtils
 
 class HanaQueryAnalyzer:
@@ -34,8 +36,11 @@ class HanaQueryAnalyzer:
         ttk.Button(button_frame, text="执行选中 (Ctrl+F8)", command=self.execute_selected).pack(side=tk.LEFT, padx=2)
         ttk.Button(button_frame, text="执行全部 (F8)", command=self.execute_all).pack(side=tk.LEFT, padx=2)
         ttk.Button(button_frame, text="导出结果 (F12)", command=self.export_results).pack(side=tk.LEFT, padx=2)
+        self.stop_button = ttk.Button(button_frame, text="终止查询 (Esc)", command=self.stop_query, state="disabled")
+        self.stop_button.pack(side=tk.LEFT, padx=2)
 
         # 绑定快捷键
+        self.root.bind_all("<Escape>", lambda e: self.stop_query())
         self.root.bind_all("<Control-n>", lambda e: self.add_tab())
         self.root.bind_all("<Control-d>", lambda e: self.clear_sql())
         self.root.bind_all("<Control-s>", lambda e: self.save_sql())
@@ -43,10 +48,11 @@ class HanaQueryAnalyzer:
         self.root.bind_all("<Control-F8>", lambda e: self.execute_selected())
         self.root.bind_all("<F8>", lambda e: self.execute_all())
         self.root.bind_all("<F12>", lambda e: self.export_results())
+        self.root.bind_all("<Control-w>", lambda e: self.close_tab())
         
-        # 初始化HANA数据库工具
+        # 初始化HANA数据库工具（延迟连接）
         self.hana_utils = HANAUtils()
-        self.hana_utils.connect()  # 建立初始连接
+        self.connected = False  # 标记是否已连接
         
         # 注册窗口关闭事件处理
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
@@ -57,6 +63,9 @@ class HanaQueryAnalyzer:
         
         # 添加初始标签页
         self.add_tab()
+        
+        # 添加关闭按钮
+        ttk.Button(button_frame, text="关闭标签页 (Ctrl+W)", command=self.close_tab).pack(side=tk.LEFT, padx=2)
         
     def add_tab(self):
         if len(self.notebook.tabs()) >= 10:
@@ -275,13 +284,51 @@ class HanaQueryAnalyzer:
             result_text.delete(item)
         result_text["columns"] = []
         
-        # 记录开始时间
-        start_time = time.time()
+        # 禁用执行按钮
+        self.disable_execute_buttons()
+        self.log_message("正在执行查询...")
         
+        # 创建队列用于线程间通信
+        self.result_queue = queue.Queue()
+        
+        # 创建并启动后台线程
+        thread = threading.Thread(
+            target=self._execute_sql_in_thread,
+            args=(sql_text, result_text)
+        )
+        thread.daemon = True
+        thread.start()
+        
+        # 启动定时器检查线程状态
+        self.root.after(100, self._check_thread_status, result_text)
+        
+    def stop_query(self):
+        """终止当前查询"""
+        if hasattr(self, 'stop_requested'):
+            self.stop_requested = True
+            self.log_message("正在终止查询...")
+
+    def _execute_sql_in_thread(self, sql_text, result_text):
+        """在后台线程中执行SQL查询"""
+        self.stop_requested = False
         try:
+            # 记录开始时间
+            start_time = time.time()
+            
+            # 首次执行时建立连接
+            if not self.connected:
+                self.hana_utils.connect()
+                self.connected = True
+                
             # 执行SQL查询
             cursor = self.hana_utils.get_cursor()
             cursor.execute(sql_text)
+            
+            # 检查是否请求终止
+            if self.stop_requested:
+                self.result_queue.put(("info", "查询已终止"))
+                return
+                
             results = cursor.fetchmany(self.max_results + 1)  # 多获取一条用于判断是否超出限制
             columns = [desc[0] for desc in cursor.description]
             
@@ -289,35 +336,73 @@ class HanaQueryAnalyzer:
                 # 检查是否超出最大结果集限制
                 if len(results) > self.max_results:
                     results = results[:self.max_results]  # 只保留前max_results条
-                    self.log_message(f"警告：结果集已被限制为前{self.max_results}条记录")
+                    self.result_queue.put(("warning", f"警告：结果集已被限制为前{self.max_results}条记录"))
                 
                 # 将结果转换为DataFrame以便格式化显示
                 df = pd.DataFrame(results, columns=columns)
                 
-                # 设置列
-                result_text["columns"] = columns
-                for col in columns:
-                    result_text.heading(col, text=col)
-                    # 设置列属性：固定宽度，禁止自动拉伸
-                    result_text.column(col, width=150, minwidth=100, stretch=False, anchor='center')
+                # 将结果放入队列
+                self.result_queue.put(("columns", columns))
+                self.result_queue.put(("data", df))
                 
-                # 插入数据
-                for _, row in df.iterrows():
-                    result_text.insert("", "end", values=tuple(row))
-                
-                # 显示记录数
-                self.log_message(f"共 {len(results)} 条记录")
+                # 记录数
+                self.result_queue.put(("info", f"共 {len(results)} 条记录"))
             else:
-                self.log_message("查询未返回结果")
+                self.result_queue.put(("info", "查询未返回结果"))
             
             duration = time.time() - start_time
-            self.log_message(f"SQL执行成功，耗时: {duration:.2f}秒")
+            self.result_queue.put(("info", f"SQL执行成功，耗时: {duration:.2f}秒"))
             
         except Exception as e:
             # 记录错误信息
             duration = time.time() - start_time
-            self.log_message(f"SQL执行失败: {str(e)}")
-            self.log_message(f"错误: {str(e)}")
+            self.result_queue.put(("error", f"SQL执行失败: {str(e)}"))
+        finally:
+            # 标记任务完成
+            self.result_queue.put(("done", None))
+            
+    def _check_thread_status(self, result_text):
+        """检查后台线程状态并更新UI"""
+        try:
+            while not self.result_queue.empty():
+                msg_type, content = self.result_queue.get_nowait()
+                
+                if msg_type == "columns":
+                    # 设置列
+                    result_text["columns"] = content
+                    for col in content:
+                        result_text.heading(col, text=col)
+                        result_text.column(col, width=150, minwidth=100, stretch=False, anchor='center')
+                elif msg_type == "data":
+                    # 插入数据
+                    for _, row in content.iterrows():
+                        result_text.insert("", "end", values=tuple(row))
+                elif msg_type in ["info", "warning", "error"]:
+                    self.log_message(content)
+                elif msg_type == "done":
+                    # 启用执行按钮
+                    self.enable_execute_buttons()
+                    return
+                    
+            # 继续检查
+            self.root.after(100, self._check_thread_status, result_text)
+        except queue.Empty:
+            # 继续检查
+            self.root.after(100, self._check_thread_status, result_text)
+            
+    def disable_execute_buttons(self):
+        """禁用所有执行相关按钮"""
+        for child in self.root.winfo_children():
+            if isinstance(child, ttk.Button) and child["text"] in ["执行选中 (Ctrl+F8)", "执行全部 (F8)"]:
+                child["state"] = "disabled"
+        self.stop_button["state"] = "normal"
+                
+    def enable_execute_buttons(self):
+        """启用所有执行相关按钮"""
+        for child in self.root.winfo_children():
+            if isinstance(child, ttk.Button) and child["text"] in ["执行选中 (Ctrl+F8)", "执行全部 (F8)"]:
+                child["state"] = "normal"
+        self.stop_button["state"] = "disabled"
         
     def export_results(self):
         # 获取当前标签页的SQL输入框和结果区域
@@ -347,6 +432,33 @@ class HanaQueryAnalyzer:
                 self.log_message(f"结果已导出到: {file_path}")
             except Exception as e:
                 self.log_message(f"导出失败: {str(e)}")
+        
+    def close_tab(self):
+        """关闭当前标签页"""
+        if len(self.notebook.tabs()) <= 1:
+            self.log_message("不能关闭最后一个标签页")
+            return
+            
+        current_tab = self.notebook.nametowidget(self.notebook.select())
+        sql_input = getattr(current_tab, 'sql_input', None)
+        
+        if sql_input:
+            # 检查SQL输入框内容是否已保存
+            sql_text = sql_input.get("1.0", tk.END).strip()
+            if sql_text:
+                # 提示用户保存
+                save = tk.messagebox.askyesnocancel(
+                    "保存更改",
+                    "当前标签页有未保存的更改，是否保存？"
+                )
+                if save is None:  # 用户点击取消
+                    return
+                if save:  # 用户选择保存
+                    self.save_sql()
+        
+        # 关闭标签页
+        self.notebook.forget(current_tab)
+        self.log_message("已关闭当前标签页")
         
     def clear_sql(self):
         # 清空当前查询窗口的SQL文本

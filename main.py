@@ -20,23 +20,21 @@ class SqlHighlighter(QSyntaxHighlighter):
         
     def setup_formats(self):
         """设置不同token类型的格式"""
-        self.formats = {}
-        
-        # 使用和hana_query_analyzer.py相同的颜色方案
-        colors = {
-            Token.Keyword: "blue",
-            Token.Operator: "red",
-            Token.Literal.String: "green",
-            Token.Comment: "gray",
-            Token.Name.Builtin: "purple",
-            Token.Punctuation: "brown"
+        # 预定义格式对象
+        self.formats = {
+            Token.Keyword: self.create_format("blue"),
+            Token.Operator: self.create_format("red"),
+            Token.Literal.String: self.create_format("green"),
+            Token.Comment: self.create_format("gray"),
+            Token.Name.Builtin: self.create_format("purple"),
+            Token.Punctuation: self.create_format("brown")
         }
         
-        # 为每种token类型创建格式
-        for token, color in colors.items():
-            format = QTextCharFormat()
-            format.setForeground(QColor(color))
-            self.formats[token] = format
+    def create_format(self, color):
+        """创建并返回格式对象"""
+        format = QTextCharFormat()
+        format.setForeground(QColor(color))
+        return format
 
     def highlightBlock(self, text):
         """实现高亮逻辑"""
@@ -88,90 +86,100 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(main_widget)
         layout = QVBoxLayout(main_widget)
         
+        # 先显示基本框架
+        self.initBasicUI(layout)
+        
+        # 延迟加载其他组件
+        from PyQt6.QtCore import QTimer
+        QTimer.singleShot(100, self.initRemainingUI)
+        
+    def initBasicUI(self, layout):
+        """初始化基本UI"""
+        # 创建进度条和状态标签
+        self.progress = QProgressBar()
+        layout.addWidget(self.progress)
+        self.status_label = QLabel()
+        layout.addWidget(self.status_label)
+        
+    def initRemainingUI(self):
+        """延迟初始化剩余UI组件"""
+        layout = self.centralWidget().layout()
 
         # SQL配置组
-        sql_group = QGroupBox("SQL配置")
-        sql_layout = QVBoxLayout()
+        self.sql_group = QGroupBox("SQL配置")
+        self.sql_layout = QVBoxLayout()
         
         # 添加SQL输入方式选择
-        input_mode_layout = QHBoxLayout()
+        self.input_mode_layout = QHBoxLayout()
         self.sql_mode_combo = QComboBox()
         self.sql_mode_combo.addItems(["上传SQL文件", "直接输入SQL"])
         self.sql_mode_combo.currentTextChanged.connect(self.switchSqlMode)
-        input_mode_layout.addWidget(QLabel("输入方式:"))
-        input_mode_layout.addWidget(self.sql_mode_combo)
-        sql_layout.addLayout(input_mode_layout)
+        self.input_mode_layout.addWidget(QLabel("输入方式:"))
+        self.input_mode_layout.addWidget(self.sql_mode_combo)
+        self.sql_layout.addLayout(self.input_mode_layout)
         
         # 创建两个输入界面容器
         self.file_widget = QWidget()
         self.input_widget = QWidget()
         
         # 文件选择界面
-        file_layout = QVBoxLayout(self.file_widget)
-        file_btn_layout = QHBoxLayout()
-        select_file_btn = QPushButton("选择SQL文件")
-        select_file_btn.clicked.connect(self.selectSQLFile)
-        file_btn_layout.addWidget(select_file_btn)
-        file_layout.addLayout(file_btn_layout)
+        self.file_layout = QVBoxLayout(self.file_widget)
+        self.file_btn_layout = QHBoxLayout()
+        self.select_file_btn = QPushButton("选择SQL文件")
+        self.select_file_btn.clicked.connect(self.selectSQLFile)
+        self.file_btn_layout.addWidget(self.select_file_btn)
+        self.file_layout.addLayout(self.file_btn_layout)
         
         # SQL文件列表
         self.sql_files_list = QListWidget()
         self.sql_files_list.setMaximumHeight(100)
         self.sql_files_list.itemClicked.connect(self.preview_sql_file)
-        file_layout.addWidget(self.sql_files_list)
+        self.file_layout.addWidget(self.sql_files_list)
         
         # SQL预览
         self.sql_preview = QTextEdit()
         self.sql_preview.setPlaceholderText("SQL预览(点击列表中的文件查看内容)...")
         self.sql_preview.setReadOnly(True)
         self.sql_preview_highlighter = SqlHighlighter(self.sql_preview.document())
-        file_layout.addWidget(self.sql_preview)
+        self.file_layout.addWidget(self.sql_preview)
         
         # SQL直接输入界面
-        input_layout = QVBoxLayout(self.input_widget)
+        self.input_layout = QVBoxLayout(self.input_widget)
         self.sql_input = QTextEdit()
         self.sql_input.setPlaceholderText("在此输入SQL语句...")
         self.sql_input_highlighter = SqlHighlighter(self.sql_input.document())
-        input_layout.addWidget(self.sql_input)
+        self.input_layout.addWidget(self.sql_input)
         
         # 默认显示文件上传界面
-        sql_layout.addWidget(self.file_widget)
-        sql_layout.addWidget(self.input_widget)
+        self.sql_layout.addWidget(self.file_widget)
+        self.sql_layout.addWidget(self.input_widget)
         self.input_widget.hide()
         
-        sql_group.setLayout(sql_layout)
-        layout.addWidget(sql_group)
+        self.sql_group.setLayout(self.sql_layout)
+        layout.addWidget(self.sql_group)
 
         # 导出配置组
-        export_group = QGroupBox("导出配置")
-        export_layout = QHBoxLayout()
+        self.export_group = QGroupBox("导出配置")
+        self.export_layout = QHBoxLayout()
         
         # 分页大小设置
-        page_size_layout = QHBoxLayout()
-        page_size_layout.addWidget(QLabel("分页大小:"))
+        self.page_size_layout = QHBoxLayout()
+        self.page_size_layout.addWidget(QLabel("分页大小:"))
         self.page_size_input = QSpinBox()
         self.page_size_input.setRange(100, 10000)
         self.page_size_input.setValue(int(os.getenv('PAGE_SIZE', 2000)))
         self.page_size_input.setSingleStep(100)
-        page_size_layout.addWidget(self.page_size_input)
+        self.page_size_layout.addWidget(self.page_size_input)
         
-        export_layout.addLayout(page_size_layout)
+        self.export_layout.addLayout(self.page_size_layout)
         
         # 导出按钮
         self.export_btn = QPushButton("导出到Excel")
         self.export_btn.clicked.connect(self.startExport)
-        export_layout.addWidget(self.export_btn)
+        self.export_layout.addWidget(self.export_btn)
         
-        export_group.setLayout(export_layout)
-        layout.addWidget(export_group)
-
-        # 进度条
-        self.progress = QProgressBar()
-        layout.addWidget(self.progress)
-
-        # 状态标签
-        self.status_label = QLabel()
-        layout.addWidget(self.status_label)
+        self.export_group.setLayout(self.export_layout)
+        layout.addWidget(self.export_group)
 
 
 
