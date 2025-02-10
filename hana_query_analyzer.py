@@ -17,6 +17,9 @@ class HanaQueryAnalyzer:
         self.root.title("HANA 查询分析器")
         self.root.geometry("1200x800")
         
+        # 存储每个标签页对应的文件路径
+        self.tab_file_paths = {}
+        
         # 从环境变量获取最大结果集大小，默认为100
         self.max_results = int(os.getenv('RESULT_SIZE', '100'))
         
@@ -35,7 +38,8 @@ class HanaQueryAnalyzer:
         ttk.Button(button_frame, text="加载 (Ctrl+O)", command=self.load_sql).pack(side=tk.LEFT, padx=2)
         ttk.Button(button_frame, text="执行选中 (Ctrl+F8)", command=self.execute_selected).pack(side=tk.LEFT, padx=2)
         ttk.Button(button_frame, text="执行全部 (F8)", command=self.execute_all).pack(side=tk.LEFT, padx=2)
-        ttk.Button(button_frame, text="导出结果 (F12)", command=self.export_results).pack(side=tk.LEFT, padx=2)
+        ttk.Button(button_frame, text="流式导出 (F12)", command=self.stream_export_results).pack(side=tk.LEFT, padx=2)
+        ttk.Button(button_frame, text="分页导出 (Ctrl+F12)", command=self.export_results).pack(side=tk.LEFT, padx=2)
         self.stop_button = ttk.Button(button_frame, text="终止查询 (Esc)", command=self.stop_query, state="disabled")
         self.stop_button.pack(side=tk.LEFT, padx=2)
         
@@ -43,20 +47,22 @@ class HanaQueryAnalyzer:
         self.connect_button = ttk.Button(button_frame, text="连接数据库", command=self.connect_disconnect_db)
         self.connect_button.pack(side=tk.LEFT, padx=2)
 
-        # 绑定快捷键
+        # 绑定快捷键（同时支持大小写）
         self.root.bind_all("<Escape>", lambda e: self.stop_query())
         self.root.bind_all("<Control-n>", lambda e: self.add_tab())
+        self.root.bind_all("<Control-N>", lambda e: self.add_tab())
         self.root.bind_all("<Control-d>", lambda e: self.clear_sql())
+        self.root.bind_all("<Control-D>", lambda e: self.clear_sql())
         self.root.bind_all("<Control-s>", lambda e: self.save_sql())
+        self.root.bind_all("<Control-S>", lambda e: self.save_sql())
         self.root.bind_all("<Control-o>", lambda e: self.load_sql())
+        self.root.bind_all("<Control-O>", lambda e: self.load_sql())
         self.root.bind_all("<Control-F8>", lambda e: self.execute_selected())
         self.root.bind_all("<F8>", lambda e: self.execute_all())
-        self.root.bind_all("<F12>", lambda e: self.export_results())
+        self.root.bind_all("<F12>", lambda e: self.stream_export_results())
+        self.root.bind_all("<Control-F12>", lambda e: self.export_results())
         self.root.bind_all("<Control-w>", lambda e: self.close_tab())
-        
-        # 初始化HANA数据库工具（延迟连接）
-        self.hana_utils = HANAUtils()
-        self.connected = False  # 标记是否已连接
+        self.root.bind_all("<Control-W>", lambda e: self.close_tab())
         
         # 注册窗口关闭事件处理
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
@@ -70,6 +76,24 @@ class HanaQueryAnalyzer:
         
         # 添加关闭按钮
         ttk.Button(button_frame, text="关闭标签页 (Ctrl+W)", command=self.close_tab).pack(side=tk.LEFT, padx=2)
+        
+        # 初始化HANA数据库工具（启动时自动连接）
+        self.hana_utils = HANAUtils()
+        self.connected = False  # 标记是否已连接
+        
+        # 尝试自动连接数据库
+        try:
+            self.hana_utils.connect()
+            if self.check_connection_status():
+                self.connected = True
+                self.log_message("数据库连接成功")
+            else:
+                self.log_message("数据库连接失败：无法验证连接")
+        except Exception as e:
+            self.log_message(f"数据库自动连接失败: {str(e)}")
+            
+        # 更新连接按钮状态
+        self.update_connection_button()
         
     def add_tab(self):
         if len(self.notebook.tabs()) >= 10:
@@ -200,14 +224,20 @@ class HanaQueryAnalyzer:
         if not sql_input:
             return
         
+        # 获取当前标签页ID
+        current_tab = self.notebook.select()
         # 获取SQL文本
         sql_text = sql_input.get("1.0", tk.END)
         
-        # 打开文件保存对话框
-        file_path = filedialog.asksaveasfilename(
-            defaultextension=".sql",
-            filetypes=[("SQL Files", "*.sql"), ("All Files", "*.*")]
-        )
+        # 检查当前标签页是否有关联的文件路径
+        file_path = self.tab_file_paths.get(current_tab)
+        
+        # 如果没有关联的文件路径，则打开文件保存对话框
+        if not file_path:
+            file_path = filedialog.asksaveasfilename(
+                defaultextension=".sql",
+                filetypes=[("SQL Files", "*.sql"), ("All Files", "*.*")]
+            )
         
         if file_path:
             try:
@@ -223,6 +253,9 @@ class HanaQueryAnalyzer:
         if not sql_input:
             return
         
+        # 获取当前标签页ID
+        current_tab = self.notebook.select()
+        
         # 打开文件选择对话框
         file_path = filedialog.askopenfilename(
             filetypes=[("SQL Files", "*.sql"), ("All Files", "*.*")]
@@ -234,6 +267,10 @@ class HanaQueryAnalyzer:
                     sql_text = f.read()
                     sql_input.delete("1.0", tk.END)
                     sql_input.insert("1.0", sql_text)
+                    # 保存文件路径到当前标签页
+                    self.tab_file_paths[current_tab] = file_path
+                    # 更新标签页标题为文件名
+                    self.notebook.tab(current_tab, text=os.path.basename(file_path))
                     # 加载后触发语法高亮
                     self.highlight_sql()
                 self.log_message(f"已加载SQL脚本: {file_path}")
@@ -420,6 +457,143 @@ class HanaQueryAnalyzer:
                 child["state"] = "normal"
         self.stop_button["state"] = "disabled"
         
+    def stream_export_results(self):
+        # 获取当前标签页的SQL输入框和结果区域
+        sql_input, result_text, _ = self.get_current_tab_widgets()
+        if not sql_input or not result_text:
+            return
+        
+        # 获取SQL文本
+        sql_text = sql_input.get("1.0", tk.END).strip()
+        if not sql_text:
+            self.log_message("没有SQL语句可执行")
+            return
+            
+        # 打开文件保存对话框
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".xlsx",
+            filetypes=[("Excel Files", "*.xlsx"), ("All Files", "*.*")]
+        )
+        
+        if file_path:
+            # 禁用所有导出按钮
+            for child in self.root.winfo_children():
+                if isinstance(child, ttk.Button) and ("导出" in child["text"]):
+                    child["state"] = "disabled"
+
+            # 创建自定义StreamExporter子类用于日志输出
+            from utils import StreamExporter
+            
+            # 创建队列用于线程间通信
+            self.stream_queue = queue.Queue()
+
+            def export_in_thread():
+                try:
+                    class UIStreamExporter(StreamExporter):
+                        def __init__(self, sql_query, output_file, queue=None):
+                            super().__init__(sql_query, output_file)
+                            self.queue = queue
+                            self.last_update_time = 0
+
+                        def export(self):
+                            try:
+                                cursor = self.utils.get_cursor()
+                                self.get_total_records(cursor)
+                                self.init_excel_writer()
+
+                                cursor.execute(self.sql_query)
+                                columns = [desc[0] for desc in cursor.description]
+                                
+                                df = pd.DataFrame(columns=columns)
+                                df.to_excel(self.writer, sheet_name='Data', index=False, startrow=0)
+                                self.worksheet = self.writer.sheets['Data']
+                                
+                                for col_num, value in enumerate(columns):
+                                    self.worksheet.write(0, col_num, value, self.header_format)
+                                
+                                self.worksheet.set_column(0, len(columns) - 1, 20)
+                                self.worksheet.freeze_panes(1, 0)
+                                
+                                row = 1
+                                processed = 0
+                                
+                                while True:
+                                    results = cursor.fetchmany(self.chunk_size)
+                                    if not results:
+                                        break
+                                        
+                                    df = pd.DataFrame(results, columns=columns)
+                                    
+                                    for col in df.columns:
+                                        try:
+                                            df[col] = pd.to_numeric(df[col])
+                                        except (ValueError, TypeError):
+                                            continue
+                                    
+                                    for r_idx, data_row in enumerate(df.values):
+                                        for c_idx, value in enumerate(data_row):
+                                            if pd.isna(value) or (isinstance(value, float) and (value == float('inf') or value == float('-inf'))):
+                                                value = None
+                                            self.worksheet.write(row + r_idx, c_idx, value, self.body_format)
+                                    
+                                    row += len(results)
+                                    processed += len(results)
+                                    
+                                    # 每隔一秒更新一次进度
+                                    current_time = time.time()
+                                    if current_time - self.last_update_time >= 1:
+                                        progress = processed/self.total_records
+                                        if self.queue:
+                                            self.queue.put(("progress", f"已导出 {processed}/{self.total_records} 条记录 ({progress:.1%})"))
+                                        self.last_update_time = current_time
+                                
+                                return True
+                                
+                            except Exception as e:
+                                if self.queue:
+                                    self.queue.put(("error", f"导出失败: {str(e)}"))
+                                raise
+                            finally:
+                                if self.writer:
+                                    self.writer.close()
+
+                    exporter = UIStreamExporter(sql_text, file_path, queue=self.stream_queue)
+                    exporter.utils = self.hana_utils  # 使用已有的数据库连接
+                    exporter.export()
+                    self.stream_queue.put(("success", f"结果已导出到: {file_path}"))
+                except Exception as e:
+                    self.stream_queue.put(("error", f"导出失败: {str(e)}"))
+                finally:
+                    self.stream_queue.put(("done", None))
+
+            def check_export_status():
+                try:
+                    while not self.stream_queue.empty():
+                        msg_type, content = self.stream_queue.get_nowait()
+                        
+                        if msg_type in ["info", "progress", "success", "error"]:
+                            self.log_message(content)
+                        elif msg_type == "done":
+                            # 启用所有导出按钮
+                            for child in self.root.winfo_children():
+                                if isinstance(child, ttk.Button) and ("导出" in child["text"]):
+                                    child["state"] = "normal"
+                            return
+                            
+                    # 继续检查
+                    self.root.after(100, check_export_status)
+                except queue.Empty:
+                    # 继续检查
+                    self.root.after(100, check_export_status)
+
+            # 创建并启动后台线程
+            thread = threading.Thread(target=export_in_thread)
+            thread.daemon = True
+            thread.start()
+
+            # 开始检查导出状态
+            self.root.after(100, check_export_status)
+
     def export_results(self):
         # 获取当前标签页的SQL输入框和结果区域
         sql_input, result_text, _ = self.get_current_tab_widgets()
@@ -441,17 +615,22 @@ class HanaQueryAnalyzer:
         if file_path:
             # 禁用导出按钮
             for child in self.root.winfo_children():
-                if isinstance(child, ttk.Button) and child["text"] == "导出结果 (F12)":
+                if isinstance(child, ttk.Button) and ("导出" in child["text"]):
                     child["state"] = "disabled"
-                    export_button = child
-                    break
+                    if child["text"] == "分页导出 (F12)":
+                        export_button = child
 
             # 创建自定义ExcelExporter子类用于日志输出
             from utils import ExcelExporter
             
             class UIExcelExporter(ExcelExporter):
                 def __init__(self, sql_query, output_file, page_size=None, log_text=None, queue=None):
-                    super().__init__(sql_query, output_file, page_size)
+                    # 创建回调函数用于日志输出
+                    def log_callback(message):
+                        if queue:
+                            queue.put(("info", message))
+                            
+                    super().__init__(sql_query, output_file, page_size, log_callback=log_callback)
                     self.log_text = log_text
                     self.queue = queue
                     
@@ -500,8 +679,10 @@ class HanaQueryAnalyzer:
                         if msg_type in ["info", "progress", "success", "error"]:
                             self.log_message(content)
                         elif msg_type == "done":
-                            # 启用导出按钮
-                            export_button["state"] = "normal"
+                            # 启用所有导出按钮
+                            for child in self.root.winfo_children():
+                                if isinstance(child, ttk.Button) and ("导出" in child["text"]):
+                                    child["state"] = "normal"
                             return
                             
                     # 继续检查
@@ -541,6 +722,10 @@ class HanaQueryAnalyzer:
                 if save:  # 用户选择保存
                     self.save_sql()
         
+        # 从文件路径映射中移除该标签页
+        if current_tab in self.tab_file_paths:
+            del self.tab_file_paths[current_tab]
+            
         # 关闭标签页
         self.notebook.forget(current_tab)
         self.log_message("已关闭当前标签页")

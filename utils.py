@@ -113,10 +113,136 @@ class HANAUtils:
         file_extension = os.getenv("FILE_EXTENSION", "xlsx") if extension is None else extension
         return f"{file_prefix}_{timestamp}.{file_extension}"
 
+class StreamExporter:
+    """流式Excel导出工具类"""
+    
+    def __init__(self, sql_query, output_file):
+        """初始化导出器"""
+        self.utils = HANAUtils()
+        self.sql_query = self.utils._clean_query(sql_query)
+        self.output_file = output_file
+        self.writer = None
+        self.total_records = 0
+        self.current_offset = 0
+        self.chunk_size = 1000  # 每次获取的数据量
+
+    def get_total_records(self, cursor=None):
+        """获取总记录数"""
+        if cursor is None:
+            cursor = self.utils.get_cursor()
+        count_query = f"SELECT COUNT(*) FROM ({self.sql_query})"
+        cursor.execute(count_query)
+        self.total_records = cursor.fetchone()[0]
+        return self.total_records
+
+    def init_excel_writer(self):
+        """初始化Excel写入器"""
+        self.writer = pd.ExcelWriter(
+            self.output_file, 
+            engine='xlsxwriter',
+            engine_kwargs={'options': {'nan_inf_to_errors': True}}
+        )
+        self.workbook = self.writer.book
+        self.worksheet = None
+        self.header_written = False
+        self.start_row = 0
+
+        # 定义格式
+        self.header_format = self.workbook.add_format({
+            'font_color': '#50596d',
+            'font_size': 9,
+            'bg_color': '#f5f7f8',
+            'border': 1,
+            'border_color': '#e0e4e6',
+            'font_name': "Arial",
+            'align': 'center',
+            'valign': 'vcenter'
+        })
+
+        self.body_format = self.workbook.add_format({
+            'font_color': '#50596d',
+            'font_size': 9,
+            'bg_color': '#ffffff',
+            'border': 1,
+            'border_color': '#f4f4f8',
+            'font_name': "Arial",
+            'align': 'center',
+            'valign': 'vcenter'
+        })
+
+    def export(self):
+        """执行流式导出"""
+        try:
+            cursor = self.utils.get_cursor()
+            self.get_total_records(cursor)
+            self.init_excel_writer()
+
+            # 执行查询但不获取所有结果
+            cursor.execute(self.sql_query)
+            columns = [desc[0] for desc in cursor.description]
+            
+            # 写入表头
+            df = pd.DataFrame(columns=columns)
+            df.to_excel(self.writer, sheet_name='Data', index=False, startrow=0)
+            self.worksheet = self.writer.sheets['Data']
+            
+            # 应用表头格式
+            for col_num, value in enumerate(columns):
+                self.worksheet.write(0, col_num, value, self.header_format)
+            
+            # 设置列宽
+            self.worksheet.set_column(0, len(columns) - 1, 20)
+            
+            # 冻结首行
+            self.worksheet.freeze_panes(1, 0)
+            
+            row = 1  # 从第二行开始写入数据（第一行是表头）
+            processed = 0
+            
+            while True:
+                # 流式获取数据
+                results = cursor.fetchmany(self.chunk_size)
+                if not results:
+                    break
+                    
+                # 转换为DataFrame并写入Excel
+                df = pd.DataFrame(results, columns=columns)
+                
+                # 转换数值字段
+                for col in df.columns:
+                    try:
+                        df[col] = pd.to_numeric(df[col])
+                    except (ValueError, TypeError):
+                        continue
+                
+                # 写入数据并应用格式
+                for r_idx, data_row in enumerate(df.values):
+                    for c_idx, value in enumerate(data_row):
+                        # 处理NaN/INF值
+                        if pd.isna(value) or (isinstance(value, float) and (value == float('inf') or value == float('-inf'))):
+                            value = None
+                        self.worksheet.write(row + r_idx, c_idx, value, self.body_format)
+                
+                row += len(results)
+                processed += len(results)
+                
+                # 更新进度
+                progress = processed/self.total_records
+                print(f"已导出 {processed}/{self.total_records} 条记录 ({progress:.1%})")
+                
+            return True
+            
+        except Exception as e:
+            print(f"导出失败: {e}")
+            raise
+        finally:
+            if self.writer:
+                self.writer.close()
+
 class ExcelExporter:
     """Excel导出工具类"""
     
-    def __init__(self, sql_query, output_file, page_size=None):
+    def __init__(self, sql_query, output_file, page_size=None, log_callback=None):
         """初始化导出器"""
         self.utils = HANAUtils()  # 创建实例但不立即连接
         self.sql_query = self.utils._clean_query(sql_query)  # 使用HANAUtils的clean_query方法
@@ -126,6 +252,7 @@ class ExcelExporter:
         self.total_records = 0
         self.current_offset = 0
         self.page_number = 1
+        self.log_callback = log_callback  # 添加日志回调函数
 
     def connect(self):
         """连接到HANA数据库"""
@@ -146,7 +273,11 @@ class ExcelExporter:
         if writer:
             self.writer = writer
         else:
-            self.writer = pd.ExcelWriter(self.output_file, engine='xlsxwriter')
+            self.writer = pd.ExcelWriter(
+                self.output_file, 
+                engine='xlsxwriter',
+                engine_kwargs={'options': {'nan_inf_to_errors': True}}
+            )
             
         self.workbook = self.writer.book
         self.worksheet = None
@@ -187,9 +318,32 @@ class ExcelExporter:
             'font_name': os.getenv("FONT_NAME", "Arial")
         })
 
+    def _add_order_by(self, sql_query, cursor):
+        """为查询添加ORDER BY所有字段"""
+        # 执行一次查询获取字段数量
+        cursor.execute(sql_query + " LIMIT 1")
+        field_count = len(cursor.description)
+        
+        # 构建ORDER BY子句
+        order_fields = ','.join(str(i) for i in range(1, field_count + 1))
+        
+        # 添加ORDER BY
+        if "ORDER BY" not in sql_query.upper():
+            sql_query += f" ORDER BY {order_fields}"
+        
+        return sql_query
+
     def export_page(self, cursor):
         """导出单个分页"""
-        paginated_query = f"{self.sql_query} LIMIT {self.page_size} OFFSET {self.current_offset}"
+        # 添加ORDER BY以确保数据完整性
+        if not hasattr(self, '_ordered_query'):
+            original_query = self.sql_query
+            self._ordered_query = self._add_order_by(self.sql_query, cursor)
+            # 如果SQL被修改了，通过回调通知UI层
+            if self.log_callback and self._ordered_query != original_query:
+                self.log_callback(f"自动添加排序字段，实际执行的SQL:\n{self._ordered_query}")
+        
+        paginated_query = f"{self._ordered_query} LIMIT {self.page_size} OFFSET {self.current_offset}"
         cursor.execute(paginated_query)
         
         results = cursor.fetchall()
