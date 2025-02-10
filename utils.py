@@ -15,33 +15,53 @@ class HANAUtils:
         self.port = int(os.getenv("HANA_PORT", 30041))
         self.user = os.getenv("HANA_USER")
         self.password = os.getenv("HANA_PASSWORD")
-        self.connection = None
+        self._connection = None
 
     def connect(self):
         """连接到HANA数据库"""
         try:
-            self.connection = dbapi.connect(
+            if not all([self.host, self.port, self.user, self.password]):
+                raise ValueError("数据库连接信息不完整，请检查环境变量配置")
+                
+            self._connection = dbapi.connect(
                 address=self.host,
                 port=self.port,
                 user=self.user,
                 password=self.password
             )
-            print("成功连接到HANA数据库。")
+            
+            # 验证连接
+            cursor = self._connection.cursor()
+            cursor.execute("SELECT 1 FROM DUMMY")
+            cursor.fetchone()
+            cursor.close()
+            
+            return True
         except Exception as e:
-            print(f"连接失败: {e}")
+            if self._connection:
+                try:
+                    self._connection.close()
+                except:
+                    pass
+                self._connection = None
+            raise type(e)(f"数据库连接失败: {str(e)}")
 
     def disconnect(self):
         """断开HANA数据库连接"""
-        if self.connection:
-            self.connection.close()
-            print("已断开HANA数据库连接。")
+        if self._connection:
+            try:
+                self._connection.close()
+                self._connection = None
+                return True
+            except Exception as e:
+                raise type(e)(f"断开连接失败: {str(e)}")
+        return False
 
     def get_cursor(self):
         """获取数据库游标"""
-        if self.connection:
-            return self.connection.cursor()
-        else:
-            raise Exception("未连接到数据库，请先调用connect()方法。")
+        if self._connection:
+            return self._connection.cursor()
+        raise Exception("未连接到数据库，请先调用connect()方法。")
 
     def execute_query(self, query):
         """执行SQL查询并返回结果"""
@@ -56,10 +76,21 @@ class HANAUtils:
             return None
 
     def _clean_query(self, query):
-        """清理SQL语句，去除末尾分号"""
-        if query and query.strip().endswith(';'):
-            return query.rstrip(';')
-        return query
+        """清理SQL语句，去除末尾分号和LIMIT子句"""
+        import re
+        if not query:
+            return query
+            
+        # 去除末尾分号
+        query = query.strip()
+        if query.endswith(';'):
+            query = query.rstrip(';')
+            
+        # 移除LIMIT子句（不区分大小写）
+        pattern = r'\bLIMIT\s+\d+\b'
+        query = re.sub(pattern, '', query, flags=re.IGNORECASE)
+        
+        return query.strip()
 
     @staticmethod
     def read_sql_from_file(file_path):
@@ -88,19 +119,13 @@ class ExcelExporter:
     def __init__(self, sql_query, output_file, page_size=None):
         """初始化导出器"""
         self.utils = HANAUtils()  # 创建实例但不立即连接
-        self.sql_query = self._clean_query(sql_query)
+        self.sql_query = self.utils._clean_query(sql_query)  # 使用HANAUtils的clean_query方法
         self.output_file = output_file
         self.page_size = int(os.getenv("PAGE_SIZE", 2000)) if page_size is None else page_size
         self.writer = None
         self.total_records = 0
         self.current_offset = 0
         self.page_number = 1
-
-    def _clean_query(self, query):
-        """清理SQL语句，去除末尾分号"""
-        if query and query.strip().endswith(';'):
-            return query.rstrip(';')
-        return query
 
     def connect(self):
         """连接到HANA数据库"""

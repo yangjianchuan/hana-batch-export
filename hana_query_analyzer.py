@@ -38,6 +38,10 @@ class HanaQueryAnalyzer:
         ttk.Button(button_frame, text="导出结果 (F12)", command=self.export_results).pack(side=tk.LEFT, padx=2)
         self.stop_button = ttk.Button(button_frame, text="终止查询 (Esc)", command=self.stop_query, state="disabled")
         self.stop_button.pack(side=tk.LEFT, padx=2)
+        
+        # 添加数据库连接/断开按钮
+        self.connect_button = ttk.Button(button_frame, text="连接数据库", command=self.connect_disconnect_db)
+        self.connect_button.pack(side=tk.LEFT, padx=2)
 
         # 绑定快捷键
         self.root.bind_all("<Escape>", lambda e: self.stop_query())
@@ -315,14 +319,26 @@ class HanaQueryAnalyzer:
             # 记录开始时间
             start_time = time.time()
             
-            # 首次执行时建立连接
-            if not self.connected:
+            # 检查并确保数据库连接
+            if not self.check_connection_status():
                 self.hana_utils.connect()
-                self.connected = True
-                
+                if not self.check_connection_status():
+                    self.result_queue.put(("error", "无法建立数据库连接"))
+                    return
+                self.update_connection_button()
+
             # 执行SQL查询
-            cursor = self.hana_utils.get_cursor()
-            cursor.execute(sql_text)
+            try:
+                cursor = self.hana_utils.get_cursor()
+                cursor.execute(sql_text)
+            except Exception as e:
+                # 如果执行失败，再次检查连接状态
+                if not self.check_connection_status():
+                    self.update_connection_button()
+                    self.result_queue.put(("error", "数据库连接已断开"))
+                    return
+                else:
+                    raise  # 如果连接正常但执行出错，抛出原始异常
             
             # 检查是否请求终止
             if self.stop_requested:
@@ -423,15 +439,84 @@ class HanaQueryAnalyzer:
         )
         
         if file_path:
-            try:
-                # 使用ExcelExporter导出结果
-                from utils import ExcelExporter
-                exporter = ExcelExporter(sql_text, file_path)
-                exporter.utils = self.hana_utils  # 使用已有的数据库连接
-                exporter.export()
-                self.log_message(f"结果已导出到: {file_path}")
-            except Exception as e:
-                self.log_message(f"导出失败: {str(e)}")
+            # 禁用导出按钮
+            for child in self.root.winfo_children():
+                if isinstance(child, ttk.Button) and child["text"] == "导出结果 (F12)":
+                    child["state"] = "disabled"
+                    export_button = child
+                    break
+
+            # 创建自定义ExcelExporter子类用于日志输出
+            from utils import ExcelExporter
+            
+            class UIExcelExporter(ExcelExporter):
+                def __init__(self, sql_query, output_file, page_size=None, log_text=None, queue=None):
+                    super().__init__(sql_query, output_file, page_size)
+                    self.log_text = log_text
+                    self.queue = queue
+                    
+                def get_total_records(self, cursor=None):
+                    total = super().get_total_records(cursor)
+                    if self.queue:
+                        self.queue.put(("info", f"共找到 {total} 条记录，开始分页导出..."))
+                    return total
+                
+                def export_page(self, cursor):
+                    if hasattr(self, 'last_update_time'):
+                        current_time = time.time()
+                        # 每5秒更新一次进度,避免过于频繁的UI更新
+                        if current_time - self.last_update_time < 5:
+                            super().export_page(cursor)
+                            return
+                    else:
+                        self.last_update_time = time.time()
+                    
+                    super().export_page(cursor)
+                    processed = min(self.current_offset, self.total_records)
+                    if self.queue:
+                        progress = processed/self.total_records
+                        self.queue.put(("progress", f"已导出 {processed}/{self.total_records} 条记录 ({progress:.1%})"))
+                        self.last_update_time = time.time()
+
+            # 创建队列用于线程间通信
+            self.export_queue = queue.Queue()
+
+            def export_in_thread():
+                try:
+                    exporter = UIExcelExporter(sql_text, file_path, queue=self.export_queue)
+                    exporter.utils = self.hana_utils  # 使用已有的数据库连接
+                    exporter.export()
+                    self.export_queue.put(("success", f"结果已导出到: {file_path}"))
+                except Exception as e:
+                    self.export_queue.put(("error", f"导出失败: {str(e)}"))
+                finally:
+                    self.export_queue.put(("done", None))
+
+            def check_export_status():
+                try:
+                    while not self.export_queue.empty():
+                        msg_type, content = self.export_queue.get_nowait()
+                        
+                        if msg_type in ["info", "progress", "success", "error"]:
+                            self.log_message(content)
+                        elif msg_type == "done":
+                            # 启用导出按钮
+                            export_button["state"] = "normal"
+                            return
+                            
+                    # 继续检查
+                    self.root.after(100, check_export_status)
+                except queue.Empty:
+                    # 继续检查
+                    self.root.after(100, check_export_status)
+
+            # 创建并启动后台线程
+            thread = threading.Thread(target=export_in_thread)
+            thread.daemon = True
+            thread.start()
+
+            # 开始检查导出状态
+            self.root.after(100, check_export_status)
         
     def close_tab(self):
         """关闭当前标签页"""
@@ -467,6 +552,58 @@ class HanaQueryAnalyzer:
             sql_input.delete("1.0", tk.END)
             self.log_message("已清空查询语句")
             
+    def check_connection_status(self):
+        """检查数据库实际连接状态"""
+        try:
+            # 尝试执行一个简单的查询来验证连接
+            if hasattr(self.hana_utils, '_connection') and self.hana_utils._connection:
+                cursor = self.hana_utils.get_cursor()
+                cursor.execute("SELECT 1 FROM DUMMY")
+                cursor.fetchone()
+                return True
+        except Exception:
+            return False
+        return False
+
+    def update_connection_button(self):
+        """更新连接按钮状态和文本"""
+        is_connected = self.check_connection_status()
+        self.connected = is_connected
+        self.connect_button.configure(
+            text="断开数据库" if is_connected else "连接数据库"
+        )
+
+    def connect_disconnect_db(self):
+        """连接或断开数据库"""
+        current_status = self.check_connection_status()
+        
+        if not current_status:
+            try:
+                # 尝试连接数据库
+                self.hana_utils.connect()
+                if self.check_connection_status():
+                    self.connected = True
+                    self.log_message("数据库连接成功")
+                else:
+                    self.connected = False
+                    self.log_message("数据库连接失败：无法验证连接")
+            except Exception as e:
+                self.connected = False
+                self.log_message(str(e))
+        else:
+            try:
+                # 尝试断开连接
+                self.hana_utils.disconnect()
+                self.connected = False
+                self.log_message("数据库已断开连接")
+            except Exception as e:
+                self.log_message(str(e))
+                # 再次检查连接状态
+                self.connected = self.check_connection_status()
+
+        # 更新按钮状态
+        self.update_connection_button()
+                
     def create_menu(self):
         # 创建菜单栏
         pass
