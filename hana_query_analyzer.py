@@ -40,6 +40,7 @@ class HanaQueryAnalyzer:
         ttk.Button(button_frame, text="执行全部 (F8)", command=self.execute_all).pack(side=tk.LEFT, padx=2)
         ttk.Button(button_frame, text="流式导出 (F12)", command=self.stream_export_results).pack(side=tk.LEFT, padx=2)
         ttk.Button(button_frame, text="分页导出 (Ctrl+F12)", command=self.export_results).pack(side=tk.LEFT, padx=2)
+        ttk.Button(button_frame, text="直接导出 (Shift+F12)", command=self.export_all).pack(side=tk.LEFT, padx=2)
         self.stop_button = ttk.Button(button_frame, text="终止查询 (Esc)", command=self.stop_query, state="disabled")
         self.stop_button.pack(side=tk.LEFT, padx=2)
         
@@ -61,6 +62,7 @@ class HanaQueryAnalyzer:
         self.root.bind_all("<F8>", lambda e: self.execute_all())
         self.root.bind_all("<F12>", lambda e: self.stream_export_results())
         self.root.bind_all("<Control-F12>", lambda e: self.export_results())
+        self.root.bind_all("<Shift-F12>", lambda e: self.export_all())
         self.root.bind_all("<Control-w>", lambda e: self.close_tab())
         self.root.bind_all("<Control-W>", lambda e: self.close_tab())
         
@@ -457,6 +459,11 @@ class HanaQueryAnalyzer:
                 child["state"] = "normal"
         self.stop_button["state"] = "disabled"
         
+    def is_select_query(self, sql_text):
+        """检查SQL语句是否以select开头(不区分大小写)"""
+        sql_text = (sql_text or "").strip().lower()
+        return sql_text.lstrip().startswith("select")
+
     def stream_export_results(self):
         # 获取当前标签页的SQL输入框和结果区域
         sql_input, result_text, _ = self.get_current_tab_widgets()
@@ -467,6 +474,11 @@ class HanaQueryAnalyzer:
         sql_text = sql_input.get("1.0", tk.END).strip()
         if not sql_text:
             self.log_message("没有SQL语句可执行")
+            return
+
+        if not self.is_select_query(sql_text):
+            self.log_message("非SELECT语句自动执行直接导出")
+            self.export_all()
             return
             
         # 打开文件保存对话框
@@ -594,6 +606,75 @@ class HanaQueryAnalyzer:
             # 开始检查导出状态
             self.root.after(100, check_export_status)
 
+    def export_all(self):
+        """直接导出所有数据"""
+        # 获取当前标签页的SQL输入框和结果区域
+        sql_input, result_text, _ = self.get_current_tab_widgets()
+        if not sql_input or not result_text:
+            return
+        
+        # 获取SQL文本
+        sql_text = sql_input.get("1.0", tk.END).strip()
+        if not sql_text:
+            self.log_message("没有SQL语句可执行")
+            return
+            
+        # 打开文件保存对话框
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".xlsx",
+            filetypes=[("Excel Files", "*.xlsx"), ("All Files", "*.*")]
+        )
+        
+        if file_path:
+            # 禁用导出按钮
+            for child in self.root.winfo_children():
+                if isinstance(child, ttk.Button) and ("导出" in child["text"]):
+                    child["state"] = "disabled"
+
+            # 创建队列用于线程间通信
+            self.export_queue = queue.Queue()
+
+            def export_in_thread():
+                try:
+                    # 创建Excel导出器实例
+                    from utils import ExcelExporter
+                    exporter = ExcelExporter(sql_text, file_path)
+                    exporter.utils = self.hana_utils  # 使用已有的数据库连接
+                    exporter.export_all()
+                    self.export_queue.put(("success", f"结果已直接导出到: {file_path}"))
+                except Exception as e:
+                    self.export_queue.put(("error", f"直接导出失败: {str(e)}"))
+                finally:
+                    self.export_queue.put(("done", None))
+
+            def check_export_status():
+                try:
+                    while not self.export_queue.empty():
+                        msg_type, content = self.export_queue.get_nowait()
+                        
+                        if msg_type in ["info", "progress", "success", "error"]:
+                            self.log_message(content)
+                        elif msg_type == "done":
+                            # 启用所有导出按钮
+                            for child in self.root.winfo_children():
+                                if isinstance(child, ttk.Button) and ("导出" in child["text"]):
+                                    child["state"] = "normal"
+                            return
+                            
+                    # 继续检查
+                    self.root.after(100, check_export_status)
+                except queue.Empty:
+                    # 继续检查
+                    self.root.after(100, check_export_status)
+
+            # 创建并启动后台线程
+            thread = threading.Thread(target=export_in_thread)
+            thread.daemon = True
+            thread.start()
+
+            # 开始检查导出状态
+            self.root.after(100, check_export_status)
+
     def export_results(self):
         # 获取当前标签页的SQL输入框和结果区域
         sql_input, result_text, _ = self.get_current_tab_widgets()
@@ -604,6 +685,11 @@ class HanaQueryAnalyzer:
         sql_text = sql_input.get("1.0", tk.END).strip()
         if not sql_text:
             self.log_message("没有SQL语句可执行")
+            return
+
+        if not self.is_select_query(sql_text):
+            self.log_message("非SELECT语句自动执行直接导出")
+            self.export_all()
             return
             
         # 打开文件保存对话框

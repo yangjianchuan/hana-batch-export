@@ -8,13 +8,13 @@
 1. 访问项目的 [Releases](../../releases) 页面
 2. 下载最新版本的 `hana-batch-export.zip`
 3. 解压 zip 包，你会得到：
-   - `hana-batch-export.exe`: 主程序
+   - `hana-batch-export.exe`和`hana_query_analyzer.exe`: 主程序
    - `.env.example`: 配置文件模板
 
 ### 配置和使用
 1. 复制 `.env.example` 为 `.env`
 2. 编辑 `.env` 文件，配置你的数据库连接信息
-3. 运行 `hana-batch-export.exe` 启动程序
+3. 运行 `hana-batch-export.exe`或者`hana_query_analyzer.exe` 启动程序
 
 ### 如何发布新版本
 如果你是项目维护者，要发布新版本：
@@ -33,9 +33,10 @@
 
 - 支持批量执行 SQL 查询
 - 支持将查询结果导出到 Excel 文件
-- 支持两种数据导出方式：
+- 支持三种数据导出方式：
   - 流式导出 (F12)：直接从数据库游标流式读取数据
   - 分页导出 (Ctrl+F12)：使用分页方式批量导出数据
+  - 直接导出 (Shift+F12)：一次性导出全部数据
 - 支持环境变量配置数据库连接
 - 提供图形化界面(GUI)操作
   - 支持SQL文件上传和直接输入两种模式
@@ -73,30 +74,9 @@ pip install -r requirements.txt
 
 ### 3. 使用方式
 
-#### 命令行模式
-##### batch_export_sql_to_excel.py
-- 功能：批量执行多个 SQL 查询，每个查询生成单独的 Excel 文件
-- 使用方法：
-  1. 将所有 SQL 文件放在 `批量导出/` 目录下
-  2. 运行命令：
-     ```bash
-     python batch_export_sql_to_excel.py
-     ```
-  3. 输出文件：每个 SQL 文件生成对应的 Excel 文件，保存在 `批量导出/` 目录下
+### 图形界面模式
 
-##### batch_export_sql_to_one_excel.py
-- 功能：批量执行多个 SQL 查询，将所有结果合并到一个 Excel 文件的不同 sheet 中
-- 使用方法：
-  1. 将所有 SQL 文件放在 `批量导出/` 目录下
-  2. 运行命令：
-     ```bash
-     python batch_export_to_one_excel.py
-     ```
-  3. 输出文件：`批量导出/output_YYYYMMDD_HHMMSS.xlsx`，每个查询结果在单独的 sheet 中
-
-#### 图形界面模式
-
-##### main.py
+#### main.py
 1. 启动GUI：
    ```bash
    python main.py
@@ -115,7 +95,7 @@ pip install -r requirements.txt
 3. 导出过程：
    - 进度条显示当前导出进度
 
-##### hana_query_analyzer.py
+#### hana_query_analyzer.py
 1. 启动GUI：
    ```bash
    python hana_query_analyzer.py
@@ -187,6 +167,7 @@ pip install -r requirements.txt
   - 大数据量导出
   - 对数据完整性要求高的场景
   - 不需要对数据进行排序的场景
+  - 只能导出SELECT 开头的语句
 
 ### 分页导出 (Ctrl+F12)
 
@@ -195,7 +176,9 @@ pip install -r requirements.txt
 3. 每个批次使用LIMIT和OFFSET进行分页查询
 4. 将每个批次的结果追加到Excel文件中
 5. 重复上述过程直到所有数据导出完成
-
+- 适用场景：
+  - 大数据量导出
+  - 只能导出SELECT 开头的语句
 特点：
 - 如果原始SQL没有ORDER BY子句，工具会自动添加所有字段作为排序条件
 - 分页过程中会在日志区域显示实际执行的SQL语句
@@ -204,6 +187,19 @@ pip install -r requirements.txt
   1. 编辑.env文件中的PAGE_SIZE值
   2. 或者在使用工具时传入page_size参数
 
+### 直接导出 (Shift+F12)
+
+1. 不进行COUNT(*)查询，直接执行原始SQL
+2. 一次性将所有查询结果读取到内存
+3. 将完整结果集写入Excel文件
+4. 适合处理中小规模数据集
+5. 特点：
+   - 执行简单快速
+   - 内存占用较高
+   - 不适合处理超大规模数据集
+   - 不会因为缺少ORDER BY而影响结果
+   - 支持导出WITH 或者 DO BEGIN开头的语句
+   
 ## 注意事项
 
 - 确保数据库连接信息正确

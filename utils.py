@@ -414,3 +414,54 @@ class ExcelExporter:
             raise
         finally:
             self.close()
+            
+    def export_all(self):
+        """直接导出全部数据"""
+        try:
+            cursor = self.utils.get_cursor()
+            self.init_excel_writer()
+            
+            # 执行查询
+            cursor.execute(self.sql_query)
+            columns = [desc[0] for desc in cursor.description]
+            
+            # 写入表头
+            df = pd.DataFrame(columns=columns)
+            df.to_excel(self.writer, sheet_name='Data', index=False, startrow=0)
+            self.worksheet = self.writer.sheets['Data']
+            
+            # 应用表头格式
+            for col_num, value in enumerate(columns):
+                self.worksheet.write(0, col_num, value, self.header_format)
+            
+            # 设置列宽
+            self.worksheet.set_column(0, len(columns) - 1, 20)
+            
+            # 冻结首行
+            self.worksheet.freeze_panes(1, 0)
+            
+            # 获取并写入所有数据
+            results = cursor.fetchall()
+            df = pd.DataFrame(results, columns=columns)
+            
+            # 转换数值字段
+            for col in df.columns:
+                try:
+                    df[col] = pd.to_numeric(df[col])
+                except (ValueError, TypeError):
+                    continue
+            
+            # 写入数据并应用格式
+            for r_idx, data_row in enumerate(df.values):
+                for c_idx, value in enumerate(data_row):
+                    if pd.isna(value) or (isinstance(value, float) and (value == float('inf') or value == float('-inf'))):
+                        value = None
+                    self.worksheet.write(1 + r_idx, c_idx, value, self.body_format)
+            
+            print(f"成功导出所有数据到 {self.output_file}")
+            
+        except Exception as e:
+            print(f"导出失败: {e}")
+            raise
+        finally:
+            self.close()
