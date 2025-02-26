@@ -13,9 +13,26 @@ from utils import HANAUtils
 
 class HanaQueryAnalyzer:
     def __init__(self, root):
+        # 初始化数据相关的属性
+        self._all_data = []
+        self._display_data = []
+        self._batch_size = 100
+        self._current_sort_col = None
+        self._sort_reverse = False
+
+        # 高亮相关的属性
+        self._highlight_after_id = None
+        self._last_content = None
+        self._token_colors = {}
+        
+        # 列宽相关的缓存
+        self._column_widths = {}  # 缓存列宽
+        self._column_content_widths = {}  # 缓存内容宽度
+        self._last_resize_time = 0  # 上次调整列宽的时间
+        
         self.root = root
         self.root.title("HANA 查询分析器")
-        self.root.geometry("1200x800")
+        self.root.geometry("1400x800")
         
         # 存储每个标签页对应的文件路径
         self.tab_file_paths = {}
@@ -97,6 +114,92 @@ class HanaQueryAnalyzer:
         # 更新连接按钮状态
         self.update_connection_button()
         
+    def create_context_menu(self, sql_input):
+        context_menu = tk.Menu(self.root, tearoff=0)
+        
+        # 标准编辑功能
+        context_menu.add_command(label="复制 (Ctrl+C)", command=lambda: sql_input.event_generate("<<Copy>>"))
+        context_menu.add_command(label="粘贴 (Ctrl+V)", command=lambda: sql_input.event_generate("<<Paste>>"))
+        context_menu.add_command(label="剪切 (Ctrl+X)", command=lambda: sql_input.event_generate("<<Cut>>"))
+        context_menu.add_separator()
+        context_menu.add_command(label="全选 (Ctrl+A)", command=lambda: self.select_all(sql_input))
+        
+        # SQL相关功能
+        context_menu.add_separator()
+        context_menu.add_command(label="执行选中 (Ctrl+F8)", command=self.execute_selected)
+        context_menu.add_command(label="格式化SQL", command=lambda: self.format_sql(sql_input))
+        
+        return context_menu
+        
+    def show_context_menu(self, event, sql_input):
+        context_menu = self.create_context_menu(sql_input)
+        try:
+            context_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            context_menu.grab_release()
+            
+    def select_all(self, widget):
+        widget.tag_add(tk.SEL, "1.0", tk.END)
+        widget.mark_set(tk.INSERT, "1.0")
+        widget.see(tk.INSERT)
+        return 'break'
+        
+    def format_sql(self, sql_input):
+        try:
+            # 获取选中的文本，如果没有选中则获取所有文本
+            try:
+                sql_text = sql_input.get(tk.SEL_FIRST, tk.SEL_LAST)
+                has_selection = True
+            except tk.TclError:
+                sql_text = sql_input.get("1.0", tk.END)
+                has_selection = False
+                
+            # 简单的SQL格式化
+            formatted_sql = self._format_sql_text(sql_text)
+            
+            if has_selection:
+                sql_input.delete(tk.SEL_FIRST, tk.SEL_LAST)
+                sql_input.insert(tk.INSERT, formatted_sql)
+            else:
+                sql_input.delete("1.0", tk.END)
+                sql_input.insert("1.0", formatted_sql)
+                
+            self.highlight_sql()
+            self.log_message("SQL格式化完成")
+        except Exception as e:
+            self.log_message(f"SQL格式化失败: {str(e)}")
+            
+    def _format_sql_text(self, sql_text):
+        # 基本的SQL格式化逻辑
+        keywords = ['SELECT', 'FROM', 'WHERE', 'GROUP BY', 'ORDER BY', 'HAVING', 'JOIN', 'LEFT JOIN', 'RIGHT JOIN', 'INNER JOIN', 'AND', 'OR']
+        lines = []
+        current_indent = 0
+        
+        # 分割SQL语句
+        sql_parts = sql_text.split('\n')
+        
+        for part in sql_parts:
+            part = part.strip()
+            if not part:
+                continue
+                
+            # 检查关键字
+            upper_part = part.upper()
+            is_keyword = any(upper_part.startswith(keyword) for keyword in keywords)
+            
+            # 调整缩进
+            if any(k in upper_part for k in ['SELECT', 'FROM', 'WHERE']):
+                if 'SELECT' in upper_part:
+                    current_indent = 0
+                else:
+                    current_indent = 1
+            
+            # 添加格式化的行
+            formatted_line = '    ' * current_indent + part
+            lines.append(formatted_line)
+            
+        return '\n'.join(lines)
+        
     def add_tab(self):
         if len(self.notebook.tabs()) >= 10:
             return
@@ -108,6 +211,10 @@ class HanaQueryAnalyzer:
         sql_input = scrolledtext.ScrolledText(frame, wrap=tk.WORD)
         sql_input.pack(fill=tk.BOTH, expand=True)
         sql_input.bind('<KeyRelease>', self.highlight_sql)
+        # 绑定右键菜单
+        sql_input.bind('<Button-3>', lambda e: self.show_context_menu(e, sql_input))
+        # 绑定Ctrl+A快捷键
+        sql_input.bind('<Control-Key-a>', lambda e: self.select_all(sql_input))
         
         # 使用PanedWindow来分隔结果区域和日志区域
         paned = ttk.PanedWindow(frame, orient=tk.VERTICAL)
@@ -117,37 +224,50 @@ class HanaQueryAnalyzer:
         result_frame = ttk.Frame(paned)
         paned.add(result_frame, weight=3)  # 结果区域占比更大
         
-        # 创建Treeview组件和滚动条
-        # 设置height参数让Treeview显示固定行数，避免挤压水平滚动条
-        tree = ttk.Treeview(result_frame, show="headings", selectmode="extended", height=15)
+        # 创建带虚拟滚动的Treeview
+        tree_frame = ttk.Frame(result_frame)  # 新增容器frame
+        tree_frame.pack(fill=tk.BOTH, expand=True)
         
-        # 添加垂直滚动条
-        vsb = ttk.Scrollbar(result_frame, orient="vertical", command=tree.yview)
-        # 添加水平滚动条
-        hsb = ttk.Scrollbar(result_frame, orient="horizontal", command=tree.xview)
+        # 创建水平滚动条容器
+        hsb_frame = ttk.Frame(tree_frame)
+        hsb_frame.pack(side=tk.BOTTOM, fill=tk.X)
+        
+        # 设置固定行高和列宽以提高渲染性能
+        tree = ttk.Treeview(tree_frame, show="headings", selectmode="extended", height=15)
+        tree.tag_configure('evenrow', background='#f0f0f0')
+        tree.tag_configure('oddrow', background='#ffffff')
+        
+        # 自定义滚动条类，实现平滑滚动
+        class SmoothScrollbar(ttk.Scrollbar):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.hover = False
+                
+            def set(self, first, last):
+                first = float(first)
+                last = float(last)
+                if first <= 0 and last >= 1:
+                    self.pack_forget()
+                else:
+                    self.pack(fill=tk.Y if self['orient'] == 'vertical' else tk.X, expand=True)
+                super().set(first, last)
+                
+        # 添加滚动条并保存为tree的属性以便后续访问
+        tree.vsb = SmoothScrollbar(tree_frame, orient="vertical", command=tree.yview)
+        tree.hsb = SmoothScrollbar(hsb_frame, orient="horizontal", command=tree.xview)
+        
+        # 使用pack布局管理器，添加水平滚动条到专用容器
+        tree.vsb.pack(side=tk.RIGHT, fill=tk.Y)
+        tree.pack(fill=tk.BOTH, expand=True)
+        tree.hsb.pack(fill=tk.X, expand=True)
         
         # 配置Treeview的滚动
-        tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
-        # 设置列宽自动调整
+        tree.configure(yscrollcommand=tree.vsb.set, xscrollcommand=tree.hsb.set)
+        
+        # 优化样式设置
         style = ttk.Style()
-        style.configure('Treeview', rowheight=25)  # 调整行高
-        # 禁用换行，确保水平滚动条可以工作
+        style.configure('Treeview', rowheight=25)
         style.configure('Treeview', wrap='none')
-        
-        # 使用grid布局管理器
-        tree.grid(column=0, row=0, sticky='nsew')
-        vsb.grid(column=1, row=0, sticky='ns')
-        hsb.grid(column=0, row=1, sticky='ew')
-        
-        # 确保水平滚动条位置正确
-        result_frame.grid_columnconfigure(0, weight=1)
-        result_frame.grid_columnconfigure(1, weight=0)  # 垂直滚动条列不伸展
-        result_frame.grid_rowconfigure(0, weight=1)
-        result_frame.grid_rowconfigure(1, weight=0)  # 水平滚动条行不伸展
-        
-        # 配置grid权重，使Treeview能够自动扩展
-        result_frame.grid_columnconfigure(0, weight=1)
-        result_frame.grid_rowconfigure(0, weight=1)
         
         # 日志区域（在PanedWindow中）
         log_frame = ttk.Frame(paned)
@@ -173,40 +293,76 @@ class HanaQueryAnalyzer:
         )
         
     def highlight_sql(self, event=None):
+        """使用防抖动和缓存优化的SQL语法高亮"""
+        if self._highlight_after_id:
+            self.root.after_cancel(self._highlight_after_id)
+        
         # 获取当前标签页的SQL输入框
         sql_input, _, _ = self.get_current_tab_widgets()
         if not sql_input:
             return
+
+        # 使用防抖动延迟执行高亮处理
+        self._highlight_after_id = self.root.after(300, lambda: self._do_highlight(sql_input))
+
+    def _do_highlight(self, sql_input):
+        """实际执行高亮处理的函数"""
+        try:
+            # 获取可见区域的开始和结束位置
+            first_visible = sql_input.index("@0,0")
+            last_visible = sql_input.index(f"@0,{sql_input.winfo_height()}")
             
-        # 获取SQL文本
-        sql_text = sql_input.get("1.0", tk.END)
-        
-        # 删除所有现有的标记
-        for tag in sql_input.tag_names():
-            sql_input.tag_remove(tag, "1.0", tk.END)
-        
-        # 使用pygments进行语法分析
-        for token, content in lex(sql_text, SqlLexer()):
-            if not content.strip():  # 跳过空白内容
-                continue
-                
-            start_index = "1.0"
-            while True:
-                # 查找下一个匹配位置
-                pos = sql_input.search(content, start_index, tk.END)
-                if not pos:
-                    break
-                    
-                # 计算结束位置
-                end = f"{pos}+{len(content)}c"
-                
-                # 添加标记
-                token_str = str(token)
-                sql_input.tag_add(token_str, pos, end)
-                sql_input.tag_config(token_str, foreground=self.get_token_color(token))
-                
-                # 更新起始位置
-                start_index = end
+            # 扩展一些行以提供缓冲
+            first_line = int(first_visible.split('.')[0])
+            last_line = int(last_visible.split('.')[0])
+            first_line = max(1, first_line - 10)  # 向上多显示10行
+            
+            # 获取可见区域的文本
+            visible_start = f"{first_line}.0"
+            visible_end = f"{last_line + 10}.end"  # 向下多显示10行
+            visible_text = sql_input.get(visible_start, visible_end)
+
+            # 如果内容没有变化，跳过处理
+            if visible_text == self._last_content:
+                return
+            self._last_content = visible_text
+
+            # 移除可见区域内的现有标记
+            for tag in sql_input.tag_names():
+                if str(tag).startswith('Token'):
+                    sql_input.tag_remove(tag, visible_start, visible_end)
+
+            # 使用pygments进行语法分析
+            for token, content in lex(visible_text, SqlLexer()):
+                if not content.strip():  # 跳过空白内容
+                    continue
+
+                start_index = visible_start
+                while True:
+                    try:
+                        # 在可见区域内搜索匹配
+                        pos = sql_input.search(content, start_index, visible_end)
+                        if not pos:
+                            break
+
+                        # 计算结束位置
+                        end = f"{pos}+{len(content)}c"
+
+                        # 使用缓存的颜色配置
+                        token_str = str(token)
+                        if token_str not in self._token_colors:
+                            self._token_colors[token_str] = self.get_token_color(token)
+                            sql_input.tag_config(token_str, foreground=self._token_colors[token_str])
+
+                        # 添加标记
+                        sql_input.tag_add(token_str, pos, end)
+                        
+                        # 更新起始位置
+                        start_index = end
+                    except tk.TclError:
+                        break  # 处理搜索过程中可能出现的错误
+        except Exception:
+            pass  # 忽略高亮过程中的错误，确保不影响编辑体验
                 
     def get_token_color(self, token):
         # 定义不同token类型的颜色
@@ -423,27 +579,154 @@ class HanaQueryAnalyzer:
                 msg_type, content = self.result_queue.get_nowait()
                 
                 if msg_type == "columns":
-                    # 设置列
-                    result_text["columns"] = content
-                    for col in content:
-                        result_text.heading(col, text=col)
-                        result_text.column(col, width=150, minwidth=100, stretch=False, anchor='center')
+                    self._handle_columns(result_text, content)
                 elif msg_type == "data":
-                    # 插入数据
-                    for _, row in content.iterrows():
-                        result_text.insert("", "end", values=tuple(row))
+                    self._handle_data(result_text, content)
                 elif msg_type in ["info", "warning", "error"]:
                     self.log_message(content)
                 elif msg_type == "done":
                     # 启用执行按钮
                     self.enable_execute_buttons()
                     return
-                    
+
+                # 只在收到第一个数据时绑定事件
+                if msg_type == "data" and len(self._all_data) == len([tuple(row) for _, row in content.iterrows()]):
+                    self._setup_tree_events(result_text)
+
             # 继续检查
             self.root.after(100, self._check_thread_status, result_text)
         except queue.Empty:
             # 继续检查
             self.root.after(100, self._check_thread_status, result_text)
+
+    def _handle_columns(self, result_text, content):
+        """处理列信息"""
+        # 清除现有数据和排序状态
+        self._current_sort_col = None
+        self._sort_reverse = False
+        self._all_data = []
+        self._display_data = []
+        self._batch_size = 100
+        
+        # 配置列并存储列名
+        result_text["columns"] = content
+        result_text._column_names = content  # 存储列名以供复制使用
+        
+        # 延迟计算列宽，提升性能
+        def resize_columns():
+            if hasattr(self, '_resize_after_id'):
+                result_text.after_cancel(self._resize_after_id)
+                
+            for col in content:
+                # 先设置一个较小的初始宽度，避免滚动条抖动
+                result_text.column(col, width=50, minwidth=50, stretch=False)
+                
+            def do_resize():
+                # 计算最佳列宽，使用缓存优化
+                for col in content:
+                    # 优先使用缓存的列宽
+                    if col in self._column_widths:
+                        result_text.column(col, width=self._column_widths[col], minwidth=50, stretch=False)
+                        continue
+                        
+                    # 基于列名的最小宽度
+                    col_width = max(100, min(200, len(col) * 10))
+                    
+                    # 检查内容宽度，使用缓存
+                    if col in self._column_content_widths:
+                        content_width = self._column_content_widths[col]
+                    else:
+                        content_width = 0
+                        sample_items = result_text.get_children()[:50]  # 减少采样数量提升性能
+                        for item in sample_items:
+                            val = result_text.set(item, col)
+                            content_width = max(content_width, len(str(val)) * 8)
+                        self._column_content_widths[col] = content_width
+                        
+                    # 计算并缓存最终宽度
+                    final_width = max(col_width, content_width)
+                    self._column_widths[col] = final_width
+                    result_text.column(col, width=final_width, minwidth=50, stretch=False)
+                    
+                    # 添加列排序功能
+                    result_text.heading(col, text=col, command=lambda c=col: self.sort_column(result_text, c))
+                    
+                # 最后一列可以stretch
+                if content:
+                    result_text.column(content[-1], stretch=True)
+                
+                # 更新滚动条状态
+                self._update_scrollbars(result_text)
+                    
+            # 延迟执行以提升性能
+            self._resize_after_id = result_text.after(100, do_resize)
+            
+        # 延迟调用列宽计算
+        result_text.after(50, resize_columns)
+        
+    def _update_scrollbars(self, tree):
+        """更新树控件的滚动条状态"""
+        if not hasattr(tree, 'vsb') or not hasattr(tree, 'hsb'):
+            return
+            
+        try:
+            # 检查是否需要垂直滚动条
+            first, last = tree.yview()
+            if first <= 0 and last >= 1:
+                tree.vsb.pack_forget()
+            else:
+                tree.vsb.pack(side=tk.RIGHT, fill=tk.Y)
+                
+            # 检查是否需要水平滚动条
+            first, last = tree.xview()
+            if first <= 0 and last >= 1:
+                tree.hsb.pack_forget()
+            else:
+                tree.hsb.pack(fill=tk.X, expand=True)
+                
+            # 强制更新UI
+            tree.update_idletasks()
+        except Exception:
+            # 忽略任何可能的tkinter错误
+            pass
+
+    def _handle_data(self, result_text, content):
+        """处理数据"""
+        # 批量处理数据
+        self._all_data.extend([tuple(row) for _, row in content.iterrows()])
+        # 初始显示第一批数据
+        display_rows = self._all_data[:self._batch_size]
+        for i, row in enumerate(display_rows):
+            tag = 'evenrow' if i % 2 == 0 else 'oddrow'
+            result_text.insert("", "end", values=row, tags=(tag,))
+
+    def _setup_tree_events(self, result_text):
+        """设置树形控件的事件绑定"""
+        # 绑定滚动相关事件以便动态加载数据
+        result_text.bind('<MouseWheel>', lambda e: self.on_scroll(e, result_text))
+        result_text.bind('<Motion>', lambda e: self.on_mouse_move(e, result_text))
+        
+        # 绑定快捷键
+        result_text.bind('<Control-c>', lambda e: self.copy_selected_with_headers(result_text))
+        result_text.bind('<Control-a>', lambda e: self.select_all_results(result_text))
+        
+        # 绑定右键菜单
+        result_text.bind('<Button-3>', lambda e: self.show_results_context_menu(e, result_text))
+        
+        # 绑定双击事件
+        result_text.bind('<Double-Button-1>', lambda e: self.copy_cell_content(e, result_text))
+        
+        # 滚动条事件绑定 - 使用树控件的内置滚动条属性
+        if hasattr(result_text, 'vsb'):
+            result_text.vsb.bind('<B1-Motion>', lambda e: self.on_scrollbar_drag(e, result_text))
+        
+        # 内存优化事件绑定
+        result_text.bind('<Leave>', lambda e: self.clear_tree_memory(result_text))
+        result_text.bind('<Enter>', lambda e: self.clear_tree_memory(result_text))
+        result_text.bind('<Configure>', lambda e: self.clear_tree_memory(result_text))
+        
+        # 定期清理定时器
+        self._cleanup_after_id = self.root.after(5000, lambda: self.clear_tree_memory(result_text))
             
     def disable_execute_buttons(self):
         """禁用所有执行相关按钮"""
@@ -879,8 +1162,104 @@ class HanaQueryAnalyzer:
         # 创建菜单栏
         pass
         
+    def sort_column(self, tree, col):
+        """列排序功能"""
+        if not self._all_data:
+            return
+            
+        # 更新排序状态
+        if self._current_sort_col != col:
+            self._sort_reverse = False
+        else:
+            self._sort_reverse = not self._sort_reverse
+        self._current_sort_col = col
+        
+        # 获取列索引
+        col_idx = tree["columns"].index(col)
+        
+        # 对所有数据进行排序
+        self._all_data.sort(key=lambda x: (x[col_idx] is None, x[col_idx]), reverse=self._sort_reverse)
+        
+        # 清除现有显示
+        for item in tree.get_children():
+            tree.delete(item)
+            
+        # 重新显示第一批数据
+        for i, row in enumerate(self._all_data[:self._batch_size]):
+            tag = 'evenrow' if i % 2 == 0 else 'oddrow'
+            tree.insert("", "end", values=row, tags=(tag,))
+
+    def on_scroll(self, event, tree):
+        """处理滚动事件"""
+        if not hasattr(self, '_all_data') or not self._all_data or len(self._all_data) <= self._batch_size:
+            return
+            
+        # 取消之前的清理定时器
+        if hasattr(self, '_cleanup_after_id'):
+            self.root.after_cancel(self._cleanup_after_id)
+            
+        current_items = len(tree.get_children())
+        if current_items >= len(self._all_data):
+            return
+            
+        # 检查是否接近底部
+        first, last = tree.yview()
+        if last > 0.9:
+            self.load_more_data(tree)
+            
+        # 设置新的清理定时器
+        self._cleanup_after_id = self.root.after(5000, lambda: self.clear_tree_memory(tree))
+            
+    def on_mouse_move(self, event, tree):
+        """处理鼠标移动事件，优化滚动和内存使用"""
+        # 取消之前的定时器
+        for timer_id in ['_scroll_after_id', '_cleanup_after_id']:
+            if hasattr(self, timer_id):
+                self.root.after_cancel(getattr(self, timer_id))
+                
+        # 设置新的滚动检查定时器
+        self._scroll_after_id = self.root.after(50, lambda: self.check_scroll_position(tree))
+        # 设置新的内存清理定时器
+        self._cleanup_after_id = self.root.after(5000, lambda: self.clear_tree_memory(tree))
+        
+    def on_scrollbar_drag(self, event, tree):
+        """处理滚动条拖动，优化性能和内存使用"""
+        # 取消之前的定时器
+        for timer_id in ['_drag_after_id', '_cleanup_after_id']:
+            if hasattr(self, timer_id):
+                self.root.after_cancel(getattr(self, timer_id))
+                
+        # 设置新的滚动检查定时器
+        self._drag_after_id = self.root.after(50, lambda: self.check_scroll_position(tree))
+        # 设置新的内存清理定时器
+        self._cleanup_after_id = self.root.after(5000, lambda: self.clear_tree_memory(tree))
+        
+    def check_scroll_position(self, tree):
+        """检查滚动位置并按需加载数据"""
+        if not self._all_data:
+            return
+            
+        first, last = tree.yview()
+        if last > 0.7:  # 当滚动到70%时加载更多
+            self.load_more_data(tree)
+            
+    def load_more_data(self, tree):
+        """加载更多数据到显示区域"""
+        current_items = len(tree.get_children())
+        if current_items >= len(self._all_data):
+            return
+            
+        # 计算新的显示范围
+        end_idx = min(current_items + self._batch_size, len(self._all_data))
+        new_data = self._all_data[current_items:end_idx]
+        
+        # 批量插入新数据
+        for i, row in enumerate(new_data, start=current_items):
+            tag = 'evenrow' if i % 2 == 0 else 'oddrow'
+            tree.insert("", "end", values=row, tags=(tag,))
+            
     def log_message(self, message):
-        # 记录日志
+        """记录日志信息"""
         _, _, log_text = self.get_current_tab_widgets()
         if not log_text:
             return
@@ -888,6 +1267,128 @@ class HanaQueryAnalyzer:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         log_text.insert(tk.END, f"[{timestamp}] {message}\n")
         log_text.see(tk.END)
+        
+    def create_results_context_menu(self, tree):
+        """创建结果区域的右键菜单"""
+        context_menu = tk.Menu(self.root, tearoff=0)
+        context_menu.add_command(label="复制 (Ctrl+C)", command=lambda: self.copy_selected_with_headers(tree))
+        context_menu.add_command(label="全选 (Ctrl+A)", command=lambda: self.select_all_results(tree))
+        return context_menu
+        
+    def show_results_context_menu(self, event, tree):
+        """显示结果区域的右键菜单"""
+        context_menu = self.create_results_context_menu(tree)
+        try:
+            context_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            context_menu.grab_release()
+            
+    def select_all_results(self, tree):
+        """选择所有结果"""
+        for item in tree.get_children():
+            tree.selection_add(item)
+            
+    def copy_cell_content(self, event, tree):
+        """复制单元格内容到剪贴板并显示提示"""
+        # 获取点击位置的单元格
+        item = tree.identify('item', event.x, event.y)
+        column = tree.identify('column', event.x, event.y)
+        
+        if not item or not column:
+            return
+            
+        # 获取实际的列信息
+        columns = tree["columns"]
+        column_name = tree.heading(column)["text"]
+        col_idx = columns.index(column_name)
+        
+        # 从values中获取对应列的值
+        values = tree.item(item)['values']
+        value = values[col_idx] if values and col_idx < len(values) else ''
+            
+        # 复制到剪贴板
+        self.root.clipboard_clear()
+        self.root.clipboard_append(str(value))
+        
+        # 记录日志提示
+        self.log_message(f"已复制单元格内容: {value}")
+            
+    def clear_tree_memory(self, tree):
+        """清理Treeview的内存使用"""
+        if not hasattr(self, '_all_data') or not self._all_data:
+            return
+            
+    def copy_selected_with_headers(self, tree):
+        """复制选中行及表头数据到剪贴板"""
+        # 确保有列名
+        if not hasattr(tree, '_column_names'):
+            return
+            
+        # 获取选中的行
+        selection = tree.selection()
+        if not selection:
+            return
+            
+        # 获取列名
+        headers = tree._column_names
+            
+        # 构建要复制的数据
+        rows = []
+        # 添加表头
+        rows.append('\t'.join(headers))
+        
+        # 添加选中的行
+        for item in selection:
+            values = tree.item(item)['values']
+            if values:
+                # 将所有值转换为字符串并确保None显示为空字符串
+                values = [str(v) if v is not None else '' for v in values]
+                rows.append('\t'.join(values))
+        
+        # 合并所有行，用换行符分隔
+        copy_text = '\n'.join(rows)
+        
+        # 复制到剪贴板
+        self.root.clipboard_clear()
+        self.root.clipboard_append(copy_text)
+            
+        visible_items = tree.get_children()
+        if len(visible_items) <= self._batch_size:
+            return
+            
+        # 获取可见区域的起始和结束位置
+        first, last = tree.yview()
+        total_items = len(visible_items)
+        
+        # 计算可见项目的范围
+        visible_start = int(first * total_items)
+        visible_end = int(last * total_items) + 1
+        
+        # 保留可见区域周围的缓冲区
+        buffer_size = self._batch_size // 2
+        start_idx = max(0, visible_start - buffer_size)
+        end_idx = min(total_items, visible_end + buffer_size)
+        
+        # 删除缓冲区外的项目
+        items_to_keep = visible_items[start_idx:end_idx]
+        items_to_remove = [item for item in visible_items if item not in items_to_keep]
+        
+        if items_to_remove:
+            # 暂时隐藏滚动条避免闪烁
+            if hasattr(tree, 'vsb'):
+                tree.vsb.pack_forget()
+            if hasattr(tree, 'hsb'):
+                tree.hsb.pack_forget()
+            
+            # 批量删除项目
+            for item in items_to_remove:
+                tree.delete(item)
+            
+            # 恢复滚动条
+            if hasattr(tree, 'vsb'):
+                tree.vsb.pack(side=tk.RIGHT, fill=tk.Y)
+            if hasattr(tree, 'hsb'):
+                tree.hsb.pack(fill=tk.X, expand=True)
         
 if __name__ == "__main__":
     root = tk.Tk()

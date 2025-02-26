@@ -4,4 +4,7 @@
 *.xlsx
 *.sql
 *.exe
+*.log
+*test*
 __pycache__/
+logs/
