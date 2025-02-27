@@ -10,6 +10,7 @@ import pandas as pd
 import threading
 import queue
 from utils import HANAUtils
+import re
 
 class HanaQueryAnalyzer:
     def __init__(self, root):
@@ -113,6 +114,9 @@ class HanaQueryAnalyzer:
             
         # 更新连接按钮状态
         self.update_connection_button()
+        
+        # 添加参数值缓存字典
+        self.param_cache = {}
         
     def create_context_menu(self, sql_input):
         context_menu = tk.Menu(self.root, tearoff=0)
@@ -478,6 +482,19 @@ class HanaQueryAnalyzer:
             self.root.destroy()
             
     def execute_sql(self, sql_text, result_text):
+        """执行SQL查询"""
+        # 检查是否包含占位符
+        placeholders = self.get_placeholders(sql_text)
+        if placeholders:
+            # 显示参数输入对话框
+            params = self.show_parameter_dialog(placeholders)
+            if params is None:  # 用户取消了输入
+                self.log_message("已取消执行")
+                return
+            # 替换占位符
+            sql_text = self.replace_placeholders(sql_text, params)
+            self.log_message("已替换占位符")
+        
         # 清除之前的结果
         for item in result_text.get_children():
             result_text.delete(item)
@@ -612,14 +629,15 @@ class HanaQueryAnalyzer:
         result_text["columns"] = content
         result_text._column_names = content  # 存储列名以供复制使用
         
+        # 设置每列的标题
+        for col in content:
+            result_text.heading(col, text=col)  # 添加这行来设置列标题
+            result_text.column(col, width=50, minwidth=50, stretch=False)  # 设置初始列宽
+        
         # 延迟计算列宽，提升性能
         def resize_columns():
             if hasattr(self, '_resize_after_id'):
                 result_text.after_cancel(self._resize_after_id)
-                
-            for col in content:
-                # 先设置一个较小的初始宽度，避免滚动条抖动
-                result_text.column(col, width=50, minwidth=50, stretch=False)
                 
             def do_resize():
                 # 计算最佳列宽，使用缓存优化
@@ -758,6 +776,18 @@ class HanaQueryAnalyzer:
         if not sql_text:
             self.log_message("没有SQL语句可执行")
             return
+
+        # 处理占位符
+        placeholders = self.get_placeholders(sql_text)
+        if placeholders:
+            # 显示参数输入对话框
+            params = self.show_parameter_dialog(placeholders)
+            if params is None:  # 用户取消了输入
+                self.log_message("已取消导出")
+                return
+            # 替换占位符
+            sql_text = self.replace_placeholders(sql_text, params)
+            self.log_message("已替换占位符")
 
         if not self.is_select_query(sql_text):
             self.log_message("非SELECT语句自动执行直接导出")
@@ -901,7 +931,19 @@ class HanaQueryAnalyzer:
         if not sql_text:
             self.log_message("没有SQL语句可执行")
             return
-            
+
+        # 处理占位符
+        placeholders = self.get_placeholders(sql_text)
+        if placeholders:
+            # 显示参数输入对话框
+            params = self.show_parameter_dialog(placeholders)
+            if params is None:  # 用户取消了输入
+                self.log_message("已取消导出")
+                return
+            # 替换占位符
+            sql_text = self.replace_placeholders(sql_text, params)
+            self.log_message("已替换占位符")
+        
         # 打开文件保存对话框
         file_path = filedialog.asksaveasfilename(
             defaultextension=".xlsx",
@@ -957,7 +999,7 @@ class HanaQueryAnalyzer:
 
             # 开始检查导出状态
             self.root.after(100, check_export_status)
-
+        
     def export_results(self):
         # 获取当前标签页的SQL输入框和结果区域
         sql_input, result_text, _ = self.get_current_tab_widgets()
@@ -969,6 +1011,18 @@ class HanaQueryAnalyzer:
         if not sql_text:
             self.log_message("没有SQL语句可执行")
             return
+
+        # 处理占位符
+        placeholders = self.get_placeholders(sql_text)
+        if placeholders:
+            # 显示参数输入对话框
+            params = self.show_parameter_dialog(placeholders)
+            if params is None:  # 用户取消了输入
+                self.log_message("已取消导出")
+                return
+            # 替换占位符
+            sql_text = self.replace_placeholders(sql_text, params)
+            self.log_message("已替换占位符")
 
         if not self.is_select_query(sql_text):
             self.log_message("非SELECT语句自动执行直接导出")
@@ -1390,6 +1444,149 @@ class HanaQueryAnalyzer:
             if hasattr(tree, 'hsb'):
                 tree.hsb.pack(fill=tk.X, expand=True)
         
+    def show_parameter_dialog(self, params):
+        """显示参数输入对话框"""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("请输入参数")
+        dialog.geometry("300x400")
+        
+        # 使对话框模态
+        dialog.transient(self.root)
+        dialog.grab_set()
+        
+        # 创建滚动框架
+        canvas = tk.Canvas(dialog)
+        scrollbar = ttk.Scrollbar(dialog, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # 存储参数输入框的字典
+        param_entries = {}
+        
+        # 为每个参数创建标签和输入框
+        for i, param in enumerate(params):
+            param_frame = ttk.Frame(scrollable_frame)
+            param_frame.pack(fill="x", padx=5, pady=2)
+            
+            ttk.Label(param_frame, text=f"{param}:").pack(side="left", padx=5)
+            entry = ttk.Entry(param_frame)
+            entry.pack(side="left", fill="x", expand=True, padx=5)
+            # 如果有缓存的值，填入输入框
+            if param in self.param_cache:
+                entry.insert(0, self.param_cache[param])
+            param_entries[param] = entry
+        
+        # 确定和取消按钮的框架
+        button_frame = ttk.Frame(dialog)
+        
+        # 结果变量
+        dialog.result = None
+        
+        def on_ok():
+            # 收集所有参数值并更新缓存
+            values = {param: entry.get() for param, entry in param_entries.items()}
+            self.param_cache.update(values)  # 更新参数缓存
+            dialog.result = values
+            dialog.destroy()
+            
+        def on_cancel():
+            dialog.result = None
+            dialog.destroy()
+            
+        def on_clear():
+            # 清空所有输入框
+            for entry in param_entries.values():
+                entry.delete(0, tk.END)
+        
+        # 使用更醒目的样式创建按钮
+        ok_button = ttk.Button(button_frame, text="确定", command=on_ok, style="Accent.TButton")
+        ok_button.pack(side="left", padx=10, pady=5)
+        
+        clear_button = ttk.Button(button_frame, text="清空", command=on_clear)
+        clear_button.pack(side="left", padx=10, pady=5)
+        
+        cancel_button = ttk.Button(button_frame, text="取消", command=on_cancel)
+        cancel_button.pack(side="left", padx=10, pady=5)
+        
+        # 创建按钮样式
+        style = ttk.Style()
+        style.configure("Accent.TButton", foreground="blue")
+        
+        # 布局按钮框架
+        button_frame.pack(side="bottom", fill="x", padx=5, pady=10)
+        
+        # 布局主要组件
+        canvas.pack(side="left", fill="both", expand=True, padx=5, pady=5)
+        scrollbar.pack(side="right", fill="y", pady=5)
+        
+        # 等待对话框关闭
+        dialog.wait_window()
+        return dialog.result
+
+    def get_placeholders(self, sql):
+        """从SQL中提取占位符"""
+        # 处理 ${xxx} 格式的占位符
+        pattern1 = r'\${([^}]+)}'
+        matches1 = re.finditer(pattern1, sql)
+        placeholders1 = set(match.group(1) for match in matches1)
+        
+        # 处理 ? 格式的占位符
+        pattern2 = r'\?'
+        matches2 = re.findall(pattern2, sql)
+        # 为问号占位符生成参数名
+        placeholders2 = {f"第{i+1}个参数" for i in range(len(matches2))}
+        
+        # 合并两种格式的占位符并排序
+        return sorted(placeholders1.union(placeholders2))
+
+    def replace_placeholders(self, sql, params):
+        """替换SQL中的占位符"""
+        # 先处理 ${xxx} 格式的占位符
+        for param, value in params.items():
+            if not param.startswith("第") or not param.endswith("个参数"):
+                placeholder = f'${{{param}}}'
+                if "PLACEHOLDER." in sql:
+                    # 对于计算视图的参数，不需要额外添加引号，直接使用值
+                    sql = sql.replace(placeholder, value)
+                else:
+                    # 普通SQL参数的处理
+                    try:
+                        float(value)
+                        sql = sql.replace(placeholder, value)
+                    except ValueError:
+                        sql = sql.replace(placeholder, f"'{value}'")
+        
+        # 再处理 ? 格式的占位符
+        question_marks = re.findall(r'\?', sql)
+        if question_marks:
+            for i in range(len(question_marks)):
+                param_name = f"第{i+1}个参数"
+                if param_name in params:
+                    value = params[param_name]
+                    # 对于计算视图的参数，总是添加单引号
+                    if "PLACEHOLDER." in sql:
+                        # 如果值本身已经包含引号，则不添加
+                        if value.startswith("'") and value.endswith("'"):
+                            sql = sql.replace('?', value, 1)
+                        else:
+                            sql = sql.replace('?', f"'{value}'", 1)
+                    else:
+                        # 普通SQL参数的处理
+                        try:
+                            float(value)
+                            sql = sql.replace('?', value, 1)
+                        except ValueError:
+                            sql = sql.replace('?', f"'{value}'", 1)
+        
+        return sql
+
 if __name__ == "__main__":
     root = tk.Tk()
     app = HanaQueryAnalyzer(root)
