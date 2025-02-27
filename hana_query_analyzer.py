@@ -33,7 +33,12 @@ class HanaQueryAnalyzer:
         
         self.root = root
         self.root.title("HANA 查询分析器")
-        self.root.geometry("1400x800")
+        
+        # 设置窗口全屏
+        self.root.state('zoomed')  # 在Windows上使用zoomed状态实现全屏
+        # 对于其他操作系统，可以使用以下方式：
+        # self.root.attributes('-zoomed', True)  # Linux
+        # self.root.attributes('-fullscreen', True)  # macOS
         
         # 存储每个标签页对应的文件路径
         self.tab_file_paths = {}
@@ -66,6 +71,12 @@ class HanaQueryAnalyzer:
         self.connect_button = ttk.Button(button_frame, text="连接数据库", command=self.connect_disconnect_db)
         self.connect_button.pack(side=tk.LEFT, padx=2)
 
+        # 添加高亮开关状态
+        self.highlight_enabled = False
+        
+        # 在按钮区域添加高亮开关按钮
+        ttk.Button(button_frame, text="开启/关闭高亮 (Ctrl+L)", command=self.toggle_highlight).pack(side=tk.LEFT, padx=2)
+        
         # 绑定快捷键（同时支持大小写）
         self.root.bind_all("<Escape>", lambda e: self.stop_query())
         self.root.bind_all("<Control-n>", lambda e: self.add_tab())
@@ -83,6 +94,8 @@ class HanaQueryAnalyzer:
         self.root.bind_all("<Shift-F12>", lambda e: self.export_all())
         self.root.bind_all("<Control-w>", lambda e: self.close_tab())
         self.root.bind_all("<Control-W>", lambda e: self.close_tab())
+        self.root.bind_all("<Control-l>", lambda e: self.toggle_highlight())
+        self.root.bind_all("<Control-L>", lambda e: self.toggle_highlight())
         
         # 注册窗口关闭事件处理
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
@@ -211,14 +224,92 @@ class HanaQueryAnalyzer:
         frame = ttk.Frame(self.notebook)
         self.notebook.add(frame, text=f"Query {len(self.notebook.tabs()) + 1}")
         
+        # 创建SQL输入区域的容器框架
+        sql_frame = ttk.Frame(frame)
+        sql_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # 创建行号文本框
+        line_numbers = tk.Text(sql_frame, width=4)
+        line_numbers.pack(side=tk.LEFT, fill=tk.Y)
+        
+        # 配置行号文本框的样式
+        line_numbers.configure(
+            background='#f0f0f0',
+            foreground='gray',
+            padx=5,
+            state='disabled',
+            relief=tk.FLAT,
+            takefocus=0,
+            wrap='none',  # 禁用自动换行
+            cursor='arrow'  # 使用箭头光标
+        )
+        
         # SQL输入框
-        sql_input = scrolledtext.ScrolledText(frame, wrap=tk.WORD)
-        sql_input.pack(fill=tk.BOTH, expand=True)
-        sql_input.bind('<KeyRelease>', self.highlight_sql)
+        sql_input = scrolledtext.ScrolledText(sql_frame, wrap=tk.NONE)  # 修改为 NONE
+        sql_input.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
         # 绑定右键菜单
         sql_input.bind('<Button-3>', lambda e: self.show_context_menu(e, sql_input))
         # 绑定Ctrl+A快捷键
         sql_input.bind('<Control-Key-a>', lambda e: self.select_all(sql_input))
+        # 绑定更新行号的事件
+        sql_input.bind('<Key>', lambda e: self.update_line_numbers(sql_input, line_numbers))
+        sql_input.bind('<Return>', lambda e: self.update_line_numbers(sql_input, line_numbers))
+        sql_input.bind('<BackSpace>', lambda e: self.update_line_numbers(sql_input, line_numbers))
+        sql_input.bind('<Delete>', lambda e: self.update_line_numbers(sql_input, line_numbers))  # 添加Delete键的绑定
+        sql_input.bind('<<Paste>>', lambda e: self.root.after(10, lambda: self.update_line_numbers(sql_input, line_numbers)))
+        sql_input.bind('<<Cut>>', lambda e: self.root.after(10, lambda: self.update_line_numbers(sql_input, line_numbers)))  # 添加剪切事件的绑定
+        
+        # 修改滚动同步处理
+        def on_scroll(*args):
+            try:
+                if args[0] == 'scroll':
+                    # 滚动事件
+                    line_numbers.yview_scroll(int(args[1]), args[2])
+                    sql_input.yview_scroll(int(args[1]), args[2])
+                elif args[0] == 'moveto':
+                    # 移动到指定位置
+                    line_numbers.yview_moveto(float(args[1]))
+                    sql_input.yview_moveto(float(args[1]))
+            except Exception as e:
+                print(f"Scroll error: {str(e)}")
+
+        def on_mousewheel(event):
+            try:
+                # 处理鼠标滚轮事件
+                delta = -1 * (event.delta // 120)
+                line_numbers.yview_scroll(delta, "units")
+                sql_input.yview_scroll(delta, "units")
+                return "break"  # 阻止事件继续传播
+            except Exception as e:
+                print(f"Mousewheel error: {str(e)}")
+        
+        # 绑定滚动事件
+        sql_input.bind("<MouseWheel>", on_mousewheel)
+        
+        # 获取滚动条组件
+        scrollbar = sql_input.vbar
+        
+        # 配置滚动条命令
+        scrollbar.config(command=on_scroll)
+        
+        # 配置同步滚动
+        def sync_scroll(*args):
+            try:
+                line_numbers.yview_moveto(args[0])
+                return True
+            except Exception as e:
+                print(f"Sync scroll error: {str(e)}")
+                return False
+        
+        sql_input.config(yscrollcommand=scrollbar.set)
+        line_numbers.config(yscrollcommand=sync_scroll)
+        
+        # 保存行号文本框的引用
+        sql_input.line_numbers = line_numbers
+        
+        # 初始化行号
+        self.update_line_numbers(sql_input, line_numbers)
         
         # 使用PanedWindow来分隔结果区域和日志区域
         paned = ttk.PanedWindow(frame, orient=tk.VERTICAL)
@@ -297,57 +388,78 @@ class HanaQueryAnalyzer:
         )
         
     def highlight_sql(self, event=None):
-        """使用防抖动和缓存优化的SQL语法高亮"""
-        if self._highlight_after_id:
-            self.root.after_cancel(self._highlight_after_id)
-        
+        """手动触发的高亮处理"""
         # 获取当前标签页的SQL输入框
         sql_input, _, _ = self.get_current_tab_widgets()
         if not sql_input:
             return
 
         # 使用防抖动延迟执行高亮处理
-        self._highlight_after_id = self.root.after(300, lambda: self._do_highlight(sql_input))
+        if self._highlight_after_id:
+            self.root.after_cancel(self._highlight_after_id)
+        self._highlight_after_id = self.root.after(100, lambda: self._do_highlight(sql_input))
 
     def _do_highlight(self, sql_input):
         """实际执行高亮处理的函数"""
         try:
-            # 获取可见区域的开始和结束位置
-            first_visible = sql_input.index("@0,0")
-            last_visible = sql_input.index(f"@0,{sql_input.winfo_height()}")
-            
-            # 扩展一些行以提供缓冲
-            first_line = int(first_visible.split('.')[0])
-            last_line = int(last_visible.split('.')[0])
-            first_line = max(1, first_line - 10)  # 向上多显示10行
-            
-            # 获取可见区域的文本
-            visible_start = f"{first_line}.0"
-            visible_end = f"{last_line + 10}.end"  # 向下多显示10行
-            visible_text = sql_input.get(visible_start, visible_end)
+            # 获取整个文本内容
+            text_content = sql_input.get("1.0", tk.END)
 
             # 如果内容没有变化，跳过处理
-            if visible_text == self._last_content:
+            if text_content == self._last_content:
                 return
-            self._last_content = visible_text
+            self._last_content = text_content
 
-            # 移除可见区域内的现有标记
+            # 移除所有现有标记
             for tag in sql_input.tag_names():
-                if str(tag).startswith('Token'):
-                    sql_input.tag_remove(tag, visible_start, visible_end)
+                if str(tag).startswith('Token') or tag == "quoted_string":
+                    sql_input.tag_remove(tag, "1.0", tk.END)
 
-            # 使用pygments进行语法分析
-            for token, content in lex(visible_text, SqlLexer()):
-                if not content.strip():  # 跳过空白内容
+            # 先处理引号内容
+            start_index = "1.0"
+            while True:
+                # 查找下一个引号
+                quote_pos = sql_input.search(r'["\']', start_index, tk.END)
+                if not quote_pos:
+                    break
+                    
+                try:
+                    # 获取引号类型
+                    quote_char = sql_input.get(quote_pos)
+                    # 查找匹配的结束引号
+                    end_pos = sql_input.search(quote_char, f"{quote_pos}+1c", tk.END)
+                    if not end_pos:
+                        break
+                    
+                    # 为整个引号内容（包括引号）添加标记
+                    sql_input.tag_add("quoted_string", quote_pos, f"{end_pos}+1c")
+                    
+                    # 更新搜索起始位置
+                    start_index = f"{end_pos}+1c"
+                    
+                except tk.TclError:
+                    break
+
+            # 配置引号内容的样式
+            sql_input.tag_config("quoted_string", foreground="blue")
+
+            # 使用pygments进行其他语法分析
+            for token, content in lex(text_content, SqlLexer()):
+                if not content.strip() or any(c in content for c in '"\''):  # 跳过空白内容和引号内容
                     continue
 
-                start_index = visible_start
+                start_index = "1.0"
                 while True:
                     try:
-                        # 在可见区域内搜索匹配
-                        pos = sql_input.search(content, start_index, visible_end)
+                        # 在整个文本中搜索匹配
+                        pos = sql_input.search(content, start_index, tk.END)
                         if not pos:
                             break
+
+                        # 检查该位置是否已经被引号标记覆盖
+                        if "quoted_string" in sql_input.tag_names(pos):
+                            start_index = f"{pos}+{len(content)}c"
+                            continue
 
                         # 计算结束位置
                         end = f"{pos}+{len(content)}c"
@@ -356,7 +468,11 @@ class HanaQueryAnalyzer:
                         token_str = str(token)
                         if token_str not in self._token_colors:
                             self._token_colors[token_str] = self.get_token_color(token)
-                            sql_input.tag_config(token_str, foreground=self._token_colors[token_str])
+                            # 为关键字配置粗体
+                            if token is Token.Keyword:
+                                sql_input.tag_config(token_str, foreground=self._token_colors[token_str], font=('TkDefaultFont', 10, 'bold'))
+                            else:
+                                sql_input.tag_config(token_str, foreground=self._token_colors[token_str])
 
                         # 添加标记
                         sql_input.tag_add(token_str, pos, end)
@@ -365,15 +481,17 @@ class HanaQueryAnalyzer:
                         start_index = end
                     except tk.TclError:
                         break  # 处理搜索过程中可能出现的错误
-        except Exception:
-            pass  # 忽略高亮过程中的错误，确保不影响编辑体验
+        except Exception as e:
+            print(f"Highlighting error: {str(e)}")  # 添加错误输出以便调试
                 
     def get_token_color(self, token):
         # 定义不同token类型的颜色
         colors = {
-            Token.Keyword: "blue",
+            Token.Keyword: "blue",  # 关键字改为蓝色
             Token.Operator: "red",
-            Token.Literal.String: "green",
+            Token.Literal.String: "blue",  # 字符串为蓝色
+            Token.Literal.String.Single: "blue",  # 单引号字符串
+            Token.Literal.String.Double: "blue",  # 双引号字符串
             Token.Comment: "gray",
             Token.Name.Builtin: "purple",
             Token.Punctuation: "brown"
@@ -433,8 +551,14 @@ class HanaQueryAnalyzer:
                     self.tab_file_paths[current_tab] = file_path
                     # 更新标签页标题为文件名
                     self.notebook.tab(current_tab, text=os.path.basename(file_path))
-                    # 加载后触发语法高亮
-                    self.highlight_sql()
+                    
+                    # 手动更新行号
+                    self.update_line_numbers(sql_input, sql_input.line_numbers)
+                    
+                    # 如果高亮功能已开启，则触发高亮
+                    if self.highlight_enabled:
+                        self.highlight_sql()
+                    
                 self.log_message(f"已加载SQL脚本: {file_path}")
             except Exception as e:
                 self.log_message(f"加载失败: {str(e)}")
@@ -605,10 +729,6 @@ class HanaQueryAnalyzer:
                     # 启用执行按钮
                     self.enable_execute_buttons()
                     return
-
-                # 只在收到第一个数据时绑定事件
-                if msg_type == "data" and len(self._all_data) == len([tuple(row) for _, row in content.iterrows()]):
-                    self._setup_tree_events(result_text)
 
             # 继续检查
             self.root.after(100, self._check_thread_status, result_text)
@@ -1448,7 +1568,7 @@ class HanaQueryAnalyzer:
         """显示参数输入对话框"""
         dialog = tk.Toplevel(self.root)
         dialog.title("请输入参数")
-        dialog.geometry("300x400")
+        dialog.geometry("400x500")  # 增加窗口宽度和高度
         
         # 使对话框模态
         dialog.transient(self.root)
@@ -1473,17 +1593,22 @@ class HanaQueryAnalyzer:
         # 为每个参数创建标签和输入框
         for i, param in enumerate(params):
             param_frame = ttk.Frame(scrollable_frame)
-            param_frame.pack(fill="x", padx=5, pady=2)
+            param_frame.pack(fill="x", padx=10, pady=5)  # 增加内边距
             
-            ttk.Label(param_frame, text=f"{param}:").pack(side="left", padx=5)
+            # 创建标签，固定宽度
+            label = ttk.Label(param_frame, text=f"{param}:", width=15)  # 设置固定宽度
+            label.pack(side="left", padx=5)
+            
+            # 创建输入框，占用剩余空间
             entry = ttk.Entry(param_frame)
             entry.pack(side="left", fill="x", expand=True, padx=5)
+            
             # 如果有缓存的值，填入输入框
             if param in self.param_cache:
                 entry.insert(0, self.param_cache[param])
             param_entries[param] = entry
         
-        # 确定和取消按钮的框架
+        # 按钮框架
         button_frame = ttk.Frame(dialog)
         
         # 结果变量
@@ -1505,22 +1630,48 @@ class HanaQueryAnalyzer:
             for entry in param_entries.values():
                 entry.delete(0, tk.END)
         
+        def on_copy():
+            # 收集当前参数值
+            values = {param: entry.get() for param, entry in param_entries.items()}
+            # 获取当前标签页的SQL输入框
+            sql_input, _, _ = self.get_current_tab_widgets()
+            if sql_input:
+                # 获取原始SQL
+                sql_text = sql_input.get("1.0", tk.END).strip()
+                # 替换占位符
+                replaced_sql = self.replace_placeholders(sql_text, values)
+                # 复制到剪贴板
+                dialog.clipboard_clear()
+                dialog.clipboard_append(replaced_sql)
+                # 显示提示消息
+                self.log_message("已复制替换后的SQL语句到剪贴板")
+        
+        # 创建两行按钮布局
+        top_button_frame = ttk.Frame(button_frame)
+        top_button_frame.pack(fill="x", pady=(5,2))
+        
+        bottom_button_frame = ttk.Frame(button_frame)
+        bottom_button_frame.pack(fill="x", pady=(2,5))
+        
         # 使用更醒目的样式创建按钮
-        ok_button = ttk.Button(button_frame, text="确定", command=on_ok, style="Accent.TButton")
-        ok_button.pack(side="left", padx=10, pady=5)
+        ok_button = ttk.Button(top_button_frame, text="确定", command=on_ok, style="Accent.TButton", width=15)
+        ok_button.pack(side="left", padx=10)
         
-        clear_button = ttk.Button(button_frame, text="清空", command=on_clear)
-        clear_button.pack(side="left", padx=10, pady=5)
+        copy_button = ttk.Button(top_button_frame, text="复制语句", command=on_copy, width=15)
+        copy_button.pack(side="right", padx=10)
         
-        cancel_button = ttk.Button(button_frame, text="取消", command=on_cancel)
-        cancel_button.pack(side="left", padx=10, pady=5)
+        clear_button = ttk.Button(bottom_button_frame, text="清空", command=on_clear, width=15)
+        clear_button.pack(side="left", padx=10)
+        
+        cancel_button = ttk.Button(bottom_button_frame, text="取消", command=on_cancel, width=15)
+        cancel_button.pack(side="right", padx=10)
         
         # 创建按钮样式
         style = ttk.Style()
         style.configure("Accent.TButton", foreground="blue")
         
         # 布局按钮框架
-        button_frame.pack(side="bottom", fill="x", padx=5, pady=10)
+        button_frame.pack(side="bottom", fill="x", padx=10, pady=10)
         
         # 布局主要组件
         canvas.pack(side="left", fill="both", expand=True, padx=5, pady=5)
@@ -1586,6 +1737,57 @@ class HanaQueryAnalyzer:
                             sql = sql.replace('?', f"'{value}'", 1)
         
         return sql
+
+    def toggle_highlight(self):
+        """切换高亮状态并应用高亮"""
+        self.highlight_enabled = not self.highlight_enabled
+        
+        # 获取当前标签页的SQL输入框
+        sql_input, _, _ = self.get_current_tab_widgets()
+        if not sql_input:
+            return
+        
+        if self.highlight_enabled:
+            # 强制重置上次内容，确保会触发高亮
+            self._last_content = None
+            self.highlight_sql()  # 直接调用高亮处理
+            self.log_message("SQL高亮已开启")
+        else:
+            # 清除所有高亮标记
+            for tag in sql_input.tag_names():
+                if str(tag).startswith('Token') or tag == "quoted_string":
+                    sql_input.tag_remove(tag, "1.0", tk.END)
+            self.log_message("SQL高亮已关闭")
+
+    def update_line_numbers(self, sql_input, line_numbers):
+        """更新行号"""
+        try:
+            # 获取文本内容并计算行数
+            text_content = sql_input.get("1.0", "end-1c")
+            # 计算实际行数，确保至少有1行
+            num_lines = max(1, text_content.count('\n') + 1)
+            
+            # 生成行号文本，每个行号后加换行符
+            line_numbers_text = '\n'.join(str(i).rjust(3) for i in range(1, num_lines + 1))
+            
+            # 更新行号文本框
+            line_numbers.configure(state='normal')
+            line_numbers.delete("1.0", tk.END)
+            line_numbers.insert("1.0", line_numbers_text)
+            
+            # 如果最后一行不是空行，确保行号区域和文本区域对齐
+            if not text_content.endswith('\n'):
+                line_numbers.insert(tk.END, '\n')
+                
+            line_numbers.configure(state='disabled')
+            
+            # 同步滚动位置
+            sql_input.update_idletasks()
+            line_numbers.update_idletasks()
+            line_numbers.yview_moveto(sql_input.yview()[0])
+            
+        except Exception as e:
+            print(f"Error updating line numbers: {str(e)}")
 
 if __name__ == "__main__":
     root = tk.Tk()
