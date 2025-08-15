@@ -8,3 +8,6 @@
 *test*
 __pycache__/
 logs/
+venv/
+.claude/
+CLAUDE.md

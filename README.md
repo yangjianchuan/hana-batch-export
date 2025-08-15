@@ -76,9 +76,14 @@
 
 ## 使用说明
 
-### 1. 安装依赖
+### 1. 创建虚拟环境并安装依赖
 ```bash
-pip install -r requirements.txt
+# 创建虚拟环境
+python -m venv venv
+
+# 激活虚拟环境并安装依赖
+# Windows:
+venv\Scripts\activate && pip install -r requirements.txt
 ```
 
 ### 2. 配置数据库连接
@@ -87,12 +92,19 @@ pip install -r requirements.txt
 
 ### 3. 使用方式
 
-### 图形界面模式
+#### 使用 start.bat 启动（推荐）
+项目包含一个 `start.bat` 批处理文件，可以方便地选择启动不同的程序：
+- 双击 `start.bat`，根据提示选择 1 或 2
+- 1 代表运行 `hana_query_analyzer.py`
+- 2 代表运行 `main.py`
 
-#### main.py
+#### 手动启动
+确保虚拟环境已激活，然后运行相应的 Python 脚本：
+
+##### main.py
 1. 启动GUI：
    ```bash
-   python main.py
+   venv\Scripts\python.exe main.py
    ```
 
 2. 界面说明：
@@ -108,10 +120,10 @@ pip install -r requirements.txt
 3. 导出过程：
    - 进度条显示当前导出进度
 
-#### hana_query_analyzer.py
+##### hana_query_analyzer.py
 1. 启动GUI：
    ```bash
-   python hana_query_analyzer.py
+   venv\Scripts\python.exe hana_query_analyzer.py
    ```
 
 2. 主要功能：
